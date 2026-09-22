@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(python --version)",
+      "PowerShell(pip --version)",
+      "PowerShell(docker --version)",
+      "PowerShell(psql --version)",
+      "PowerShell(npx tsc -b --noEmit)",
+      "PowerShell(npm run build)"
+    ]
+  }
+}

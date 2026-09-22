@@ -1,0 +1,58 @@
+# Local convenience only; production is the Dockerfile on Railway.
+#
+#   docker compose up backend
+#     Runs the API against whatever .env points at (e.g. your dev Supabase /
+#     Upstash / HiveMQ instances). No local Redis or broker is started.
+#
+#   docker compose --profile test run --rm tests
+#     Full test suite (including ffmpeg clip processing) against throwaway
+#     Postgres + Redis containers. The suite TRUNCATEs every table and
+#     FLUSHes Redis, so it only ever talks to these containers.
+services:
+  backend:
+    build:
+      context: .
+      target: runtime
+    env_file: .env
+    environment:
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+
+  tests:
+    profiles: ["test"]
+    build:
+      context: .
+      target: test
+    environment:
+      APP_ENV: test
+      DATABASE_URL: postgresql://app_user:app_password@postgres:5432/proctorai
+      DATABASE_ADMIN_URL: postgresql://postgres:postgres@postgres:5432/proctorai
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    profiles: ["test"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: proctorai
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d proctorai"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    profiles: ["test"]
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

@@ -1,0 +1,9 @@
+-r requirements.txt
+
+pytest==9.1.1
+pytest-asyncio==1.4.0
+# Socket.IO client transport for scripts/verify_deployment.py.
+aiohttp==3.14.3
+# In-process Redis stand-in (scripts/dev_redis_server.py) for running the
+# suite on machines without Docker. Never used in production.
+fakeredis[lua]==2.38.0

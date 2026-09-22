@@ -1,0 +1,18 @@
+NOTICE OF ACADEMIC INTEGRITY DECISION
+Reference: {{ notice_reference }}
+
+To: {{ student_name }} (Registration No. {{ student_reg_no }})
+Course: {{ course_code }}
+Examination: {{ exam_date }}, {{ room }}
+
+During the examination above, the proctoring system recorded the following behaviour(s):
+{% for behaviour in behaviours %}  - {{ behaviour }}
+{% endfor %}
+This record was reviewed by the invigilating teacher and confirmed. Following review, the Head of Department has decided on the following outcome:
+
+Penalty: {{ penalty_type }}
+{{ penalty_description }}
+
+You have the right to appeal this decision. You may submit an appeal, with any supporting information, through the ProctorAI student portal under My Cases.
+
+Issued by: {{ issued_by }}
