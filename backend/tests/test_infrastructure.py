@@ -33,6 +33,8 @@ PRODUCTION_BASE = {
     "mqtt_use_tls": True,
     "mqtt_port": 8883,
     "trusted_proxy_hops": 1,
+    "session_cookie_secure": True,
+    "supabase_url": "https://project.supabase.co",
 }
 
 
@@ -91,6 +93,9 @@ async def test_cors_rejects_unlisted_origin_and_allows_configured_one() -> None:
         {"internal_api_key": ""},
         {"database_url": "postgresql://app_user:app_password@localhost:5432/proctorai"},
         {"trusted_proxy_hops": 0},
+        {"session_cookie_secure": False},
+        {"supabase_url": ""},
+        {"supabase_url": "http://project.supabase.co"},
     ],
 )
 def test_production_refuses_insecure_configuration(override: dict[str, object]) -> None:
@@ -105,6 +110,11 @@ def test_production_accepts_secure_configuration() -> None:
 def test_wildcard_cors_rejected_even_in_development() -> None:
     with pytest.raises(InsecureConfigurationError):
         validate_settings(Settings(app_env="development", cors_allowed_origins="*"))
+
+
+def test_samesite_none_cookie_requires_secure_everywhere() -> None:
+    with pytest.raises(InsecureConfigurationError):
+        validate_settings(Settings(app_env="development", session_cookie_samesite="none", session_cookie_secure=False))
 
 
 async def test_internal_endpoints_reject_missing_wrong_or_unconfigured_key(
@@ -122,26 +132,24 @@ async def test_internal_endpoints_reject_missing_wrong_or_unconfigured_key(
     assert (await client.post("/internal/detections", json={})).status_code == 401
 
 
-async def test_spoofed_forwarded_for_cannot_bypass_signup_rate_limit(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+async def test_spoofed_forwarded_for_cannot_forge_the_audited_ip(
+    client: AsyncClient, admin_conn: asyncpg.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Behind one proxy only the rightmost X-Forwarded-For entry is trustworthy."""
     monkeypatch.setattr(settings, "trusted_proxy_hops", 1)
-    statuses = []
-    for i in range(6):
-        response = await client.post(
-            "/api/auth/signup",
-            headers={"X-Forwarded-For": f"10.0.0.{i}, 203.0.113.7"},
-            json={"full_name": f"Student {i}", "email": f"30000{i}@students.au.edu.pk", "password": "SuperSecret1!"},
-        )
-        statuses.append(response.status_code)
-    assert statuses == [202] * 5 + [429]
+    response = await client.post(
+        "/api/auth/session",
+        headers={"X-Forwarded-For": "10.0.0.9, 203.0.113.7"},
+        json={"supabase_access_token": "not-a-jwt"},
+    )
+    assert response.status_code == 401
+    assert await admin_conn.fetchval("SELECT ip_address FROM audit_log WHERE action = 'sign_in'") == "203.0.113.7"
 
 
 async def test_audit_log_is_append_only(
     client: AsyncClient, admin_conn: asyncpg.Connection, low_priv_conn: asyncpg.Connection
 ) -> None:
-    await client.post("/api/auth/login", json={"email": "nobody@students.au.edu.pk", "password": "wrong-password"})
+    await client.post("/api/auth/session", json={"supabase_access_token": "not-a-jwt"})
     assert await admin_conn.fetchval("SELECT count(*) FROM audit_log") >= 1
 
     with pytest.raises(asyncpg.InsufficientPrivilegeError):
@@ -176,8 +184,3 @@ async def test_plaintext_redis_is_detected_and_refused_when_tls_required(
     monkeypatch.setattr(settings, "require_redis_tls", True)
     with pytest.raises(redis_client.InsecureRedisTransportError):
         await redis_client.verify_redis_transport()
-
-
-async def test_rate_limit_check_is_one_round_trip(client: AsyncClient, round_trips: list[int]) -> None:
-    await redis_client.increment_and_check_limit(key="signup:ip:test", limit=5, window_seconds=60)
-    assert len(round_trips) == 1

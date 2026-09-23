@@ -3,7 +3,6 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { NotificationPanel } from './NotificationPanel';
-import { RoleSwitcher } from '../dev/RoleSwitcher';
 
 export function AppShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -40,9 +39,6 @@ export function AppShell() {
         isOpen={notificationsOpen}
         onClose={() => setNotificationsOpen(false)}
       />
-
-      {/* Dev-only role switcher */}
-      <RoleSwitcher />
     </div>
   );
 }

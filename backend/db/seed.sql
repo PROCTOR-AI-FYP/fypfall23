@@ -1,24 +1,24 @@
--- Fixture data for manual testing / the RLS cross-visibility test.
+-- Fixture data for manual testing and the test suite.
 -- Apply after schema.sql: psql "$DATABASE_ADMIN_URL" -f db/seed.sql
 --
--- Password for every seeded account is: "ChangeMe123!"
--- bcrypt hash below was generated with backend/app/security.py::hash_password
--- at bcrypt_rounds=12. Regenerate if you change BCRYPT_ROUNDS.
+-- Accounts have no credentials: each activates on its owner's first Google
+-- sign-in (supabase_user_id is NULL until then). Every address is on the
+-- configured ALLOWED_EMAIL_DOMAIN.
 
--- Students (email_verified = true so they can log in immediately).
-INSERT INTO users (full_name, email, password_hash, role, registration_or_employee_no, status, email_verified)
+-- Students.
+INSERT INTO users (full_name, email, role, department, registration_or_employee_no, status)
 VALUES
-    ('Ayesha Raza', '232475@students.au.edu.pk', '$2b$12$kAuV3.oC7DbJ0Z.sdOqUEOtEj4a3jewlf1tuzQAqKX/g/s77gxhTu', 'student', '232475', 'active', true),
-    ('Bilal Ahmed', '232490@students.au.edu.pk', '$2b$12$kAuV3.oC7DbJ0Z.sdOqUEOtEj4a3jewlf1tuzQAqKX/g/s77gxhTu', 'student', '232490', 'active', true)
+    ('Ayesha Raza', '232475@students.au.edu.pk', 'student', 'Computer Science', '232475', 'active'),
+    ('Bilal Ahmed', '232490@students.au.edu.pk', 'student', 'Computer Science', '232490', 'active')
 ON CONFLICT (email) DO NOTHING;
 
--- One of each staff role, staff-shaped local parts, same institutional domain.
-INSERT INTO users (full_name, email, password_hash, role, registration_or_employee_no, status, email_verified)
+-- One of each staff role, staff-shaped local parts.
+INSERT INTO users (full_name, email, role, department, registration_or_employee_no, status)
 VALUES
-    ('Dr. M. Bilal', 'm.bilal@students.au.edu.pk', '$2b$12$kAuV3.oC7DbJ0Z.sdOqUEOtEj4a3jewlf1tuzQAqKX/g/s77gxhTu', 'teacher', 'EMP-1001', 'active', true),
-    ('Dr. Sara Khan', 'hod.cs@students.au.edu.pk', '$2b$12$kAuV3.oC7DbJ0Z.sdOqUEOtEj4a3jewlf1tuzQAqKX/g/s77gxhTu', 'hod', 'EMP-1002', 'active', true),
-    ('Admin Registrar', 'admin.registrar@students.au.edu.pk', '$2b$12$kAuV3.oC7DbJ0Z.sdOqUEOtEj4a3jewlf1tuzQAqKX/g/s77gxhTu', 'admin', 'EMP-1003', 'active', true),
-    ('Usman Tariq', 'controller.exams@students.au.edu.pk', '$2b$12$kAuV3.oC7DbJ0Z.sdOqUEOtEj4a3jewlf1tuzQAqKX/g/s77gxhTu', 'exam_controller', 'EMP-1004', 'active', true)
+    ('Dr. M. Bilal', 'm.bilal@students.au.edu.pk', 'teacher', 'Computer Science', 'EMP-1001', 'active'),
+    ('Dr. Sara Khan', 'hod.cs@students.au.edu.pk', 'hod', 'Computer Science', 'EMP-1002', 'active'),
+    ('Admin Registrar', 'admin.registrar@students.au.edu.pk', 'admin', 'IT Services', 'EMP-1003', 'active'),
+    ('Usman Tariq', 'controller.exams@students.au.edu.pk', 'exam_controller', 'Examination Branch', 'EMP-1004', 'active')
 ON CONFLICT (email) DO NOTHING;
 
 -- A session + one case per seeded student, for the cross-visibility test.

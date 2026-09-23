@@ -1,8 +1,12 @@
 """Socket.IO server for live detection alerts.
 
-Clients authenticate with the same JWT as the REST API (auth={"token": ...})
-and must join a session room explicitly; joining is authorized per session
-(a teacher only for sessions they invigilate). Students cannot connect.
+Clients authenticate with the same httpOnly session cookie as the REST API
+(the browser sends it on the handshake; JS never handles the token), and the
+account is re-checked against the users table exactly as deps does. They
+must join a session room explicitly; joining is authorized per session (a
+teacher only for sessions they invigilate). Students cannot connect.
+Cross-site WebSocket hijacking is blocked by the Origin check below
+(cors_allowed_origins), since cookies ride along on cross-origin handshakes.
 
 AsyncRedisManager routes emits through Redis pub/sub so another process
 (e.g. a future worker) can emit too; with a single API replica it is not
@@ -12,21 +16,22 @@ from __future__ import annotations
 
 import logging
 import uuid
+from http.cookies import CookieError, SimpleCookie
 from typing import Any
 
-import jwt
 import socketio
+from fastapi import HTTPException
 from redis.exceptions import RedisError
 
 from app.config import settings
 from app.db import acquire_connection
+from app.deps import resolve_session_user
 from app.models import Role
-from app.security import decode_access_token
 from app.services.authorization import can_access_session
 
 logger = logging.getLogger("proctorai.sockets")
 
-EVENT_DETECTION_NEW = "detection:new"
+EVENT_ALERT_NEW = "alert:new"
 EVENT_JOIN_SESSION = "join_session"
 
 sio = socketio.AsyncServer(
@@ -41,20 +46,26 @@ def session_room(session_id: str) -> str:
     return f"session:{session_id}"
 
 
+def _session_token(environ: dict[str, Any]) -> str | None:
+    cookies = SimpleCookie()
+    try:
+        cookies.load(environ.get("HTTP_COOKIE", ""))
+    except CookieError:
+        return None
+    morsel = cookies.get(settings.session_cookie_name)
+    return morsel.value if morsel is not None else None
+
+
 @sio.event
 async def connect(sid: str, environ: dict[str, Any], auth: Any) -> None:
-    token = auth.get("token") if isinstance(auth, dict) else None
-    if not token:
-        raise socketio.exceptions.ConnectionRefusedError("authentication required")
     try:
-        payload = decode_access_token(token)
-        role = Role(payload["role"])
-        user_id = str(payload["sub"])
-    except (jwt.PyJWTError, KeyError, ValueError) as exc:
-        raise socketio.exceptions.ConnectionRefusedError("invalid token") from exc
-    if role == Role.STUDENT:
+        async with acquire_connection() as conn:
+            user = await resolve_session_user(conn, _session_token(environ))
+    except HTTPException as exc:
+        raise socketio.exceptions.ConnectionRefusedError("authentication required") from exc
+    if user.role == Role.STUDENT:
         raise socketio.exceptions.ConnectionRefusedError("not permitted")
-    await sio.save_session(sid, {"user_id": user_id, "role": role.value})
+    await sio.save_session(sid, {"user_id": user.user_id, "role": user.role.value})
 
 
 @sio.on(EVENT_JOIN_SESSION)
@@ -82,6 +93,6 @@ async def join_session(sid: str, data: Any) -> dict[str, Any]:
 async def emit_detection(session_id: str, payload: dict[str, Any]) -> None:
     """Best effort: the case is already committed, so a Redis hiccup must not fail the request."""
     try:
-        await sio.emit(EVENT_DETECTION_NEW, payload, room=session_room(session_id))
+        await sio.emit(EVENT_ALERT_NEW, payload, room=session_room(session_id))
     except (RedisError, OSError):
         logger.exception("socket.io emit failed for session %s", session_id)

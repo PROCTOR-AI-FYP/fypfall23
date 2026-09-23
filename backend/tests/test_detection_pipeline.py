@@ -227,6 +227,10 @@ async def test_snapshot_path_must_stay_inside_the_session_folder(
     assert response.status_code == 422
 
 
+def session_cookie(token: str) -> dict[str, str]:
+    return {"Cookie": f"{settings.session_cookie_name}={token}"}
+
+
 def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -253,14 +257,15 @@ async def test_end_to_end_detection_reaches_connected_socketio_client(
     teacher_token = await login(client, TEACHER_EMAIL)
     student_token = await login(client, STUDENT_A_EMAIL)
 
-    student = socketio.AsyncClient()
-    with pytest.raises(socketio.exceptions.ConnectionError):
-        await student.connect(live_server, auth={"token": student_token}, transports=["websocket"])
+    for rejected_headers in ({}, session_cookie("not-a-jwt"), session_cookie(student_token)):
+        client_socket = socketio.AsyncClient()
+        with pytest.raises(socketio.exceptions.ConnectionError):
+            await client_socket.connect(live_server, headers=rejected_headers, transports=["websocket"])
 
     teacher = socketio.AsyncClient()
     received: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-    teacher.on(sockets.EVENT_DETECTION_NEW, received.put)
-    await teacher.connect(live_server, auth={"token": teacher_token}, transports=["websocket"])
+    teacher.on(sockets.EVENT_ALERT_NEW, received.put)
+    await teacher.connect(live_server, headers=session_cookie(teacher_token), transports=["websocket"])
     try:
         assert await teacher.call(sockets.EVENT_JOIN_SESSION, {"session_id": OTHER_SESSION_ID}) == {
             "ok": False, "error": "forbidden"

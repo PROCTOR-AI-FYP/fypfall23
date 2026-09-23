@@ -5,25 +5,15 @@ direct query executed as the low-privilege DB role with RLS active.
 from __future__ import annotations
 
 import asyncpg
-import pytest
 from httpx import AsyncClient
 
-pytestmark = pytest.mark.asyncio
-
-STUDENT_A_EMAIL = "232475@students.au.edu.pk"  # seeded, has case AU-CS-INT-2026-014
-STUDENT_B_EMAIL = "232490@students.au.edu.pk"  # seeded, has case AU-CS-INT-2026-015
-
-
-async def _login(client: AsyncClient, email: str) -> str:
-    resp = await client.post("/api/auth/login", json={"email": email, "password": "ChangeMe123!"})
-    assert resp.status_code == 200
-    return resp.json()["access_token"]
+from tests.helpers import STUDENT_A_EMAIL, STUDENT_B_EMAIL, auth, login
 
 
 async def test_student_a_cannot_see_student_b_case_via_api(client: AsyncClient) -> None:
-    token_a = await _login(client, STUDENT_A_EMAIL)
+    token_a = await login(client, STUDENT_A_EMAIL)
 
-    resp = await client.get("/api/cases", headers={"Authorization": f"Bearer {token_a}"})
+    resp = await client.get("/api/cases", headers=auth(token_a))
     assert resp.status_code == 200
     cases = resp.json()
 
@@ -49,9 +39,7 @@ async def test_rls_blocks_cross_student_visibility_at_db_level(
         assert all(str(row["student_id"]) != str(student_b_id) for row in visible_rows)
 
 
-async def test_rls_allows_non_student_roles_to_see_all_cases(
-    low_priv_conn: asyncpg.Connection, admin_conn: asyncpg.Connection
-) -> None:
+async def test_rls_allows_non_student_roles_to_see_all_cases(low_priv_conn: asyncpg.Connection) -> None:
     async with low_priv_conn.transaction():
         await low_priv_conn.execute("SELECT set_config('app.current_role', 'hod', true)")
         await low_priv_conn.execute("SELECT set_config('app.current_user_id', '', true)")

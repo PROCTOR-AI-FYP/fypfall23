@@ -30,7 +30,7 @@ from tests.helpers import (
     INTERNAL_KEY,
     STUDENT_A_EMAIL,
     TEACHER_EMAIL,
-    bearer,
+    auth,
     login,
 )
 from tests.test_detection_pipeline import (  # noqa: F401  (fixture)
@@ -224,11 +224,10 @@ async def _detection_id(admin_conn: asyncpg.Connection, case_id: str) -> str:
 async def other_teacher(admin_conn: asyncpg.Connection) -> str:
     await admin_conn.execute(
         """
-        INSERT INTO users (full_name, email, password_hash, role, registration_or_employee_no, status, email_verified)
-        SELECT 'Sana Naqvi', $1, password_hash, 'teacher', 'EMP-1005', 'active', true FROM users WHERE email = $2
+        INSERT INTO users (full_name, email, role, department, registration_or_employee_no, status)
+        VALUES ('Sana Naqvi', $1, 'teacher', 'Computer Science', 'EMP-1005', 'active')
         """,
         OTHER_TEACHER_EMAIL,
-        TEACHER_EMAIL,
     )
     return OTHER_TEACHER_EMAIL
 
@@ -241,26 +240,26 @@ async def test_reviewers_get_signed_urls_and_others_do_not(
     detection_id = await _detection_id(admin_conn, case_id)
 
     teacher = await login(client, TEACHER_EMAIL)
-    pending = (await client.get(f"/api/cases/{case_id}/media", headers=bearer(teacher))).json()
+    pending = (await client.get(f"/api/cases/{case_id}/media", headers=auth(teacher))).json()
     assert pending["clip_status"] == "pending_upload"
     assert pending["clip"] is None and pending["record_image_url"] is None
     assert pending["snapshot_url"].startswith("https://signed.test/snapshots/")
 
     await _attach_clip(admin_conn, detection_id)
     for email in (TEACHER_EMAIL, HOD_EMAIL):
-        media = (await client.get(f"/api/cases/{case_id}/media", headers=bearer(await login(client, email)))).json()
+        media = (await client.get(f"/api/cases/{case_id}/media", headers=auth(await login(client, email)))).json()
         assert media["clip_status"] == "available"
         assert media["clip"]["url"] == f"https://signed.test/evidence-clips/{ACTIVE_SESSION_ID}/{detection_id}.mp4?ttl=300"
         assert media["clip"]["duration_seconds"] == 9.8 and media["clip"]["size_bytes"] == 180000
         assert media["record_image_url"].endswith(f"{detection_id}-record.jpg?ttl=300")
 
-    by_detection = await client.get(f"/api/detections/{detection_id}/media", headers=bearer(teacher))
+    by_detection = await client.get(f"/api/detections/{detection_id}/media", headers=auth(teacher))
     assert by_detection.json()["case_id"] == case_id
 
     other = await login(client, other_teacher)
-    assert (await client.get(f"/api/cases/{case_id}/media", headers=bearer(other))).status_code == 404
+    assert (await client.get(f"/api/cases/{case_id}/media", headers=auth(other))).status_code == 404
     for email in (STUDENT_A_EMAIL, ADMIN_EMAIL, CONTROLLER_EMAIL):
-        response = await client.get(f"/api/cases/{case_id}/media", headers=bearer(await login(client, email)))
+        response = await client.get(f"/api/cases/{case_id}/media", headers=auth(await login(client, email)))
         assert response.status_code == 403
     assert await admin_conn.fetchval("SELECT count(*) FROM audit_log WHERE action = 'evidence_media_viewed'") == 4
 
@@ -325,7 +324,7 @@ async def test_clips_are_deleted_only_once_review_is_final(
 
     detection_id = next(iter(final))
     hod = await login(client, HOD_EMAIL)
-    media = (await client.get(f"/api/detections/{detection_id}/media", headers=bearer(hod))).json()
+    media = (await client.get(f"/api/detections/{detection_id}/media", headers=auth(hod))).json()
     assert media["clip_status"] == "deleted_after_review"
     assert media["clip"] is None and media["clip_deleted_at"] is not None
     assert media["record_image_url"].endswith(f"{detection_id}-record.jpg?ttl=300")

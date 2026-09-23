@@ -302,11 +302,6 @@ export interface ApiError {
 
 // ── Auth Types ─────────────────────────────
 
-export interface LoginCredentials {
-  email: string;
-  password: string;
-}
-
 export interface AuthState {
   user: User | null;
   isAuthenticated: boolean;

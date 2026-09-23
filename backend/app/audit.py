@@ -9,11 +9,15 @@ from typing import Any
 
 import asyncpg
 
-ACTION_SIGNUP_ATTEMPT = "signup_attempt"
-ACTION_VERIFY_EMAIL_ATTEMPT = "verify_email_attempt"
-ACTION_RESEND_VERIFICATION_ATTEMPT = "resend_verification_attempt"
-ACTION_LOGIN_ATTEMPT = "login_attempt"
+ACTION_SIGN_IN = "sign_in"
+# Recorded separately from ACTION_SIGN_IN so it stands out in the audit log:
+# a verified Google identity tried to use an account already linked to a
+# different one.
+ACTION_SECURITY_RELINK_REJECTED = "security_relink_rejected"
+ACTION_SIGN_OUT = "sign_out"
 ACTION_ADMIN_CREATE_USER = "admin_create_user"
+ACTION_ADMIN_UPDATE_USER = "admin_update_user"
+ACTION_ADMIN_DELETE_USER = "admin_delete_user"
 ACTION_SEATMAP_UPLOAD = "seatmap_upload"
 ACTION_DETECTION_RECORDED = "detection_recorded"
 ACTION_CASE_TRANSITION = "case_transition"

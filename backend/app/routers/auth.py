@@ -1,291 +1,213 @@
-"""Self-service auth endpoints: signup, email verification, resend, login.
+"""Google sign-in (via Supabase Auth) exchanged for the app's own session.
 
-Every code path here follows spec section 1's rule: the client never sets a
-role. Signup's Pydantic model has no `role` field (extra="ignore"), and the
-only role signup can ever assign is Role.STUDENT, derived from the email's
-six-digit local part.
+POST /api/auth/session  Supabase access token -> verified -> account lookup,
+                        first-time activation or student auto-provisioning
+                        -> app JWT in an httpOnly cookie
+GET  /api/auth/me       who the session cookie belongs to (JS cannot read it)
+POST /api/auth/logout   clears the cookie
+
+Account rules, all decided here from the *verified* email, never from any
+client hint:
+  - the email must be on ALLOWED_EMAIL_DOMAIN
+  - unknown + six-digit local part -> a student account is created
+  - unknown + anything else        -> refused; staff are created by an Admin
+  - known, not yet linked          -> linked to this Google identity (activation)
+  - known, linked to this identity -> signed in
+  - known, linked to another one   -> refused and audit-logged as a security
+                                      event; never silently re-linked
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import uuid
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
-from app.audit import (
-    ACTION_LOGIN_ATTEMPT,
-    ACTION_RESEND_VERIFICATION_ATTEMPT,
-    ACTION_SIGNUP_ATTEMPT,
-    ACTION_VERIFY_EMAIL_ATTEMPT,
-    record_audit,
-)
+from app.audit import ACTION_SECURITY_RELINK_REJECTED, ACTION_SIGN_IN, ACTION_SIGN_OUT, record_audit
 from app.config import settings
-from app.deps import get_client_ip, get_db
-from app.email import get_email_sender
-from app.models import Role
-from app.redis_client import increment_and_check_limit
-from app.schemas import (
-    LoginRequest,
-    LoginResponse,
-    ResendVerificationRequest,
-    SignupRequest,
-    SignupResponse,
-    VerifyEmailRequest,
-    VerifyEmailResponse,
-)
+from app.deps import CurrentUser, get_client_ip, get_current_user, get_db, resolve_session_user
+from app.models import Role, UserStatus
+from app.schemas import SessionRequest, UserOut
 from app.security import (
+    clear_session_cookie,
     create_access_token,
-    derive_role_for_signup,
-    generate_verification_token,
-    hash_password,
-    hash_email_for_rate_limit,
-    hash_token,
     is_allowed_domain,
-    verification_token_expiry,
-    verify_password,
+    is_student_shaped_local_part,
+    local_part_of,
+    normalize_email,
+    set_session_cookie,
 )
+from app.services.users import USER_COLUMNS, fetch_user, row_to_user
+from app.supabase_auth import SupabaseAuthUnavailable, SupabaseTokenError, verify_supabase_token
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-ERR_NON_UNIVERSITY_EMAIL = "Please sign up with your university email."
-ERR_STAFF_LOCAL_PART = "This account type is created by an administrator — contact your department."
-ERR_RATE_LIMITED = "Too many requests. Please try again later."
-ERR_INVALID_CREDENTIALS = "Invalid email or password."
-ERR_EMAIL_NOT_VERIFIED = "Please verify your email before signing in — resend link"
-ERR_INVALID_VERIFICATION = "Invalid or expired verification link."
-
-GENERIC_SIGNUP_MESSAGE = "If this email is valid, a verification link has been sent."
-
-# A syntactically valid bcrypt hash of a value nobody can produce, used to
-# keep login's timing similar when no user row exists at all.
-_DUMMY_PASSWORD_HASH = "$2b$12$C6UzMDM.H6dfI/f3IKxGGO5/y5vY0f7YHf5c5c5c5c5c5c5c5c5c5C"
+ERR_UNVERIFIED = "Your Google sign-in could not be verified. Please try again."
+ERR_UNAVAILABLE = "Sign-in is temporarily unavailable. Please try again in a moment."
+ERR_STAFF_NOT_PROVISIONED = (
+    "This account must be created by an administrator before you can sign in. Contact your department."
+)
+ERR_DISABLED = "This account has been deactivated. Contact your department."
+ERR_IDENTITY_CONFLICT = (
+    "This account is linked to a different Google identity. Contact your administrator."
+)
 
 
-def _reject_if_not_student_signup_eligible(email: str) -> None:
-    if not is_allowed_domain(email):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=ERR_NON_UNIVERSITY_EMAIL)
-    if derive_role_for_signup(email) is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=ERR_STAFF_LOCAL_PART)
+def _wrong_domain_message() -> str:
+    return f"Sign in with your @{settings.allowed_email_domain} Google account."
 
 
-async def _enforce_signup_rate_limit(*, prefix: str, ip: str, email: str) -> None:
-    ip_ok = await increment_and_check_limit(
-        key=f"{prefix}:ip:{ip}",
-        limit=settings.signup_ip_limit,
-        window_seconds=settings.signup_rate_limit_window_seconds,
-    )
-    email_ok = await increment_and_check_limit(
-        key=f"{prefix}:email:{hash_email_for_rate_limit(email)}",
-        limit=settings.signup_email_limit,
-        window_seconds=settings.signup_rate_limit_window_seconds,
-    )
-    if not ip_ok or not email_ok:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=ERR_RATE_LIMITED)
+class _Rejected(Exception):
+    def __init__(self, code: int, detail: str, outcome: str, *, security_event: bool = False) -> None:
+        self.code, self.detail, self.outcome, self.security_event = code, detail, outcome, security_event
 
 
-async def _issue_verification_token(conn: asyncpg.Connection, *, user_id: str, email: str, full_name: str) -> None:
-    raw_token = generate_verification_token()
-    await conn.execute(
-        """
-        INSERT INTO email_verifications (user_id, token_hash, expires_at)
-        VALUES ($1, $2, $3)
-        """,
-        user_id,
-        hash_token(raw_token),
-        verification_token_expiry(),
-    )
-    verification_link = f"{settings.frontend_url}/verify-email?token={raw_token}"
-    await get_email_sender().send_verification_email(
-        to_address=email, full_name=full_name, verification_link=verification_link
-    )
-
-
-@router.post("/signup", response_model=SignupResponse, status_code=status.HTTP_202_ACCEPTED)
-async def signup(
-    body: SignupRequest,
-    request: Request,
-    conn: asyncpg.Connection = Depends(get_db),
-) -> SignupResponse:
-    ip = get_client_ip(request)
-    _reject_if_not_student_signup_eligible(body.email)
-    await _enforce_signup_rate_limit(prefix="signup", ip=ip, email=body.email)
-
-    derived = derive_role_for_signup(body.email)
-    assert derived is not None  # guaranteed by _reject_if_not_student_signup_eligible
-    role, registration_no = derived
-
-    outcome = "unknown"
-    existing = await conn.fetchrow(
-        "SELECT id, email_verified, full_name FROM users WHERE email = $1", body.email
-    )
-    if existing is None:
-        try:
-            new_user = await conn.fetchrow(
-                """
-                INSERT INTO users (full_name, email, password_hash, role, registration_or_employee_no, status, email_verified)
-                VALUES ($1, $2, $3, $4, $5, 'active', false)
-                RETURNING id
-                """,
-                body.full_name,
-                body.email,
-                hash_password(body.password),
-                role.value,
-                registration_no,
-            )
-        except asyncpg.UniqueViolationError:
-            # Lost a race with a concurrent signup/admin-create for the same
-            # email or reg. no. Treat identically to "already exists".
-            outcome = "already_existed_race"
-        else:
-            await _issue_verification_token(
-                conn, user_id=str(new_user["id"]), email=body.email, full_name=body.full_name
-            )
-            outcome = "created_new_account"
-    elif not existing["email_verified"]:
-        await _issue_verification_token(
-            conn, user_id=str(existing["id"]), email=body.email, full_name=existing["full_name"]
+async def _provision_student(conn: asyncpg.Connection, *, email: str, sub: str, full_name: str | None) -> asyncpg.Record:
+    reg_no = local_part_of(email)
+    try:
+        row = await conn.fetchrow(
+            f"""
+            INSERT INTO users (full_name, email, role, registration_or_employee_no, supabase_user_id, auth_provider)
+            VALUES ($1, $2, 'student', $3, $4::uuid, 'google')
+            RETURNING {USER_COLUMNS}, supabase_user_id, deleted_at
+            """,
+            full_name or reg_no,
+            email,
+            reg_no,
+            sub,
         )
-        outcome = "resent_to_existing_unverified"
-    else:
-        outcome = "already_verified_noop"
-
-    await record_audit(
-        conn,
-        actor_id=None,
-        action=ACTION_SIGNUP_ATTEMPT,
-        target=body.email,
-        new_value={"outcome": outcome},
-        ip_address=ip,
-    )
-    return SignupResponse(message=GENERIC_SIGNUP_MESSAGE)
+    except asyncpg.UniqueViolationError as exc:
+        # Either this Google identity is already linked to another account, or
+        # the registration number is held by an existing (differently emailed)
+        # row. Both mean an identity/record conflict, not a new student.
+        raise _Rejected(status.HTTP_403_FORBIDDEN, ERR_IDENTITY_CONFLICT, "identity_conflict", security_event=True) from exc
+    return row
 
 
-@router.post("/verify-email", response_model=VerifyEmailResponse)
-async def verify_email(
-    body: VerifyEmailRequest,
-    request: Request,
-    conn: asyncpg.Connection = Depends(get_db),
-) -> VerifyEmailResponse:
-    token_hash = hash_token(body.token)
+async def _resolve_account(conn: asyncpg.Connection, *, email: str, sub: str, full_name: str | None) -> tuple[asyncpg.Record, str]:
+    """Returns (user row, outcome) or raises _Rejected. Runs inside a transaction."""
     row = await conn.fetchrow(
-        "SELECT id, user_id, expires_at, consumed_at FROM email_verifications WHERE token_hash = $1",
-        token_hash,
+        f"SELECT {USER_COLUMNS}, supabase_user_id, deleted_at FROM users WHERE lower(email) = $1 FOR UPDATE",
+        email,
     )
 
-    is_valid = (
-        row is not None
-        and row["consumed_at"] is None
-        and row["expires_at"] > datetime.now(timezone.utc)
-    )
+    if row is None:
+        if not is_student_shaped_local_part(local_part_of(email)):
+            raise _Rejected(status.HTTP_403_FORBIDDEN, ERR_STAFF_NOT_PROVISIONED, "staff_not_provisioned")
+        return await _provision_student(conn, email=email, sub=sub, full_name=full_name), "student_provisioned"
 
-    if not is_valid:
+    if row["deleted_at"] is not None or row["status"] != UserStatus.ACTIVE.value:
+        raise _Rejected(status.HTTP_403_FORBIDDEN, ERR_DISABLED, "account_disabled")
+
+    linked = row["supabase_user_id"]
+    if linked is None:
+        try:
+            activated = await conn.fetchrow(
+                f"""
+                UPDATE users SET supabase_user_id = $1::uuid, auth_provider = 'google'
+                WHERE id = $2 AND supabase_user_id IS NULL
+                RETURNING {USER_COLUMNS}, supabase_user_id, deleted_at
+                """,
+                sub,
+                row["id"],
+            )
+        except asyncpg.UniqueViolationError as exc:
+            # This Google identity already belongs to a different account.
+            raise _Rejected(
+                status.HTTP_403_FORBIDDEN, ERR_IDENTITY_CONFLICT, "identity_conflict", security_event=True
+            ) from exc
+        return activated, "account_activated"
+
+    if str(linked) != sub:
+        raise _Rejected(status.HTTP_403_FORBIDDEN, ERR_IDENTITY_CONFLICT, "relink_rejected", security_event=True)
+    return row, "signed_in"
+
+
+@router.post("/session", response_model=UserOut)
+async def create_session(
+    body: SessionRequest,
+    request: Request,
+    response: Response,
+    conn: asyncpg.Connection = Depends(get_db),
+) -> UserOut:
+    ip = get_client_ip(request)
+
+    try:
+        identity = await verify_supabase_token(body.supabase_access_token)
+    except SupabaseAuthUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ERR_UNAVAILABLE) from exc
+    except SupabaseTokenError as exc:
+        await record_audit(
+            conn, actor_id=None, action=ACTION_SIGN_IN, target="unverified-token",
+            new_value={"outcome": "invalid_token", "reason": str(exc)}, ip_address=ip,
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=ERR_UNVERIFIED) from exc
+
+    email = normalize_email(identity.email)
+    try:
+        sub = str(uuid.UUID(identity.sub))
+    except ValueError:
+        sub = ""
+    if not sub:
+        await record_audit(
+            conn, actor_id=None, action=ACTION_SIGN_IN, target=email,
+            new_value={"outcome": "invalid_token", "reason": "sub_not_uuid"}, ip_address=ip,
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=ERR_UNVERIFIED)
+
+    if not is_allowed_domain(email):
+        await record_audit(
+            conn, actor_id=None, action=ACTION_SIGN_IN, target=email,
+            new_value={"outcome": "wrong_domain"}, ip_address=ip,
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_wrong_domain_message())
+
+    try:
+        async with conn.transaction():
+            row, outcome = await _resolve_account(conn, email=email, sub=sub, full_name=identity.full_name)
+    except _Rejected as rejection:
         await record_audit(
             conn,
             actor_id=None,
-            action=ACTION_VERIFY_EMAIL_ATTEMPT,
-            target=body.token[:8] + "...",
-            new_value={"outcome": "invalid_or_expired_or_consumed"},
-            ip_address=get_client_ip(request),
-        )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=ERR_INVALID_VERIFICATION)
-
-    async with conn.transaction():
-        await conn.execute(
-            "UPDATE email_verifications SET consumed_at = now() WHERE id = $1", row["id"]
-        )
-        await conn.execute(
-            "UPDATE users SET email_verified = true WHERE id = $1", row["user_id"]
-        )
-
-    await record_audit(
-        conn,
-        actor_id=str(row["user_id"]),
-        action=ACTION_VERIFY_EMAIL_ATTEMPT,
-        target=str(row["user_id"]),
-        new_value={"outcome": "verified"},
-        ip_address=get_client_ip(request),
-    )
-    return VerifyEmailResponse(message="Email verified. You can now sign in.")
-
-
-@router.post("/resend-verification", response_model=SignupResponse, status_code=status.HTTP_202_ACCEPTED)
-async def resend_verification(
-    body: ResendVerificationRequest,
-    request: Request,
-    conn: asyncpg.Connection = Depends(get_db),
-) -> SignupResponse:
-    ip = get_client_ip(request)
-    _reject_if_not_student_signup_eligible(body.email)
-    await _enforce_signup_rate_limit(prefix="resend", ip=ip, email=body.email)
-
-    outcome = "no_matching_unverified_account"
-    existing = await conn.fetchrow(
-        "SELECT id, email_verified, full_name FROM users WHERE email = $1", body.email
-    )
-    if existing is not None and not existing["email_verified"]:
-        await _issue_verification_token(
-            conn, user_id=str(existing["id"]), email=body.email, full_name=existing["full_name"]
-        )
-        outcome = "resent"
-
-    await record_audit(
-        conn,
-        actor_id=None,
-        action=ACTION_RESEND_VERIFICATION_ATTEMPT,
-        target=body.email,
-        new_value={"outcome": outcome},
-        ip_address=ip,
-    )
-    return SignupResponse(message=GENERIC_SIGNUP_MESSAGE)
-
-
-@router.post("/login", response_model=LoginResponse)
-async def login(
-    body: LoginRequest,
-    request: Request,
-    conn: asyncpg.Connection = Depends(get_db),
-) -> LoginResponse:
-    ip = get_client_ip(request)
-    user = await conn.fetchrow(
-        "SELECT id, password_hash, role, email_verified FROM users WHERE email = $1", body.email
-    )
-
-    password_hash = user["password_hash"] if user is not None else _DUMMY_PASSWORD_HASH
-    password_ok = verify_password(body.password, password_hash) and user is not None
-
-    if not password_ok:
-        await record_audit(
-            conn,
-            actor_id=None,
-            action=ACTION_LOGIN_ATTEMPT,
-            target=body.email,
-            new_value={"outcome": "invalid_credentials"},
+            action=ACTION_SECURITY_RELINK_REJECTED if rejection.security_event else ACTION_SIGN_IN,
+            target=email,
+            new_value={"outcome": rejection.outcome, "presented_sub": sub},
             ip_address=ip,
         )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=ERR_INVALID_CREDENTIALS)
+        raise HTTPException(status_code=rejection.code, detail=rejection.detail) from rejection
 
-    if not user["email_verified"]:
-        await record_audit(
-            conn,
-            actor_id=str(user["id"]),
-            action=ACTION_LOGIN_ATTEMPT,
-            target=body.email,
-            new_value={"outcome": "email_not_verified"},
-            ip_address=ip,
-        )
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERR_EMAIL_NOT_VERIFIED)
-
-    # Role is read fresh from the row just fetched in this request — never
-    # cached, never client-supplied.
-    role = Role(user["role"])
-    token = create_access_token(user_id=str(user["id"]), role=role)
-
+    user = row_to_user(row)
     await record_audit(
-        conn,
-        actor_id=str(user["id"]),
-        action=ACTION_LOGIN_ATTEMPT,
-        target=body.email,
-        new_value={"outcome": "success"},
-        ip_address=ip,
+        conn, actor_id=user.id, action=ACTION_SIGN_IN, target=email, new_value={"outcome": outcome}, ip_address=ip
     )
-    return LoginResponse(access_token=token, role=role)
+    # Role comes from the row just read/written in this request.
+    set_session_cookie(response, create_access_token(user_id=user.id, role=Role(row["role"])))
+    return user
+
+
+@router.get("/me", response_model=UserOut)
+async def me(
+    current_user: CurrentUser = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
+) -> UserOut:
+    user = await fetch_user(conn, current_user.user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="This account is no longer active")
+    return user
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(request: Request, conn: asyncpg.Connection = Depends(get_db)) -> Response:
+    # Works with an expired or invalid cookie too: signing out must always succeed.
+    try:
+        user = await resolve_session_user(conn, request.cookies.get(settings.session_cookie_name))
+    except HTTPException:
+        user = None
+    if user is not None:
+        await record_audit(
+            conn, actor_id=user.user_id, action=ACTION_SIGN_OUT, target=user.user_id,
+            new_value={}, ip_address=get_client_ip(request),
+        )
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    clear_session_cookie(response)
+    return response

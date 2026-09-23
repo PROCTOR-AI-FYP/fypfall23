@@ -26,23 +26,132 @@ import {
   invigilatorAssignments as fixtureAssignments,
 } from './fixtures';
 
-// ── Auth / signup constants ────────────────
+// ── HTTP client (real backend) ─────────────
+// Every call sends the httpOnly session cookie (credentials: 'include') and,
+// on state-changing methods, the CSRF header the backend requires.
 
-// All new self-service and admin-provisioned accounts use this single
-// institutional domain. Legacy fixture users (@au.edu.pk / @student.au.edu.pk)
-// remain untouched — they represent already-provisioned accounts.
-export const ALLOWED_EMAIL_DOMAIN = 'students.au.edu.pk';
+// Empty string = same origin (e.g. a Vercel rewrite proxying /api to the API).
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000').replace(/\/$/, '');
+const CSRF_HEADER = 'X-ProctorAI-CSRF';
+// Dispatched on any 401 outside /api/auth so the auth context can drop a dead session.
+export const UNAUTHORIZED_EVENT = 'proctorai:unauthorized';
 
-const STUDENT_LOCAL_PART_PATTERN = /^\d{6}$/;
+type Query = Record<string, string | number | boolean | undefined | null>;
 
-interface PendingVerification {
-  token: string;
+interface RequestOptions {
+  query?: Query;
+  body?: unknown;
+  form?: FormData;
+}
+
+function errorCode(status: number): string {
+  if (status === 400 || status === 422) return 'VALIDATION_ERROR';
+  if (status === 401) return 'AUTH_ERROR';
+  if (status === 403) return 'FORBIDDEN';
+  if (status === 404) return 'NOT_FOUND';
+  if (status === 409) return 'CONFLICT';
+  if (status === 413) return 'TOO_LARGE';
+  if (status === 503) return 'UNAVAILABLE';
+  return 'INTERNAL_ERROR';
+}
+
+function detailMessage(payload: unknown, status: number): string {
+  const detail = (payload as { detail?: unknown } | null)?.detail;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as { msg?: string; loc?: unknown[] };
+    const field = Array.isArray(first.loc) ? first.loc[first.loc.length - 1] : undefined;
+    return first.msg ? `${field ? `${String(field)}: ` : ''}${first.msg}` : 'The request was not valid.';
+  }
+  return status >= 500 ? 'The server ran into a problem. Please try again.' : `Request failed (${status}).`;
+}
+
+async function request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+  const url = new URL(`${API_BASE_URL}${path}`, window.location.origin);
+  for (const [key, value] of Object.entries(options.query ?? {})) {
+    if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
+  }
+
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (method !== 'GET') headers[CSRF_HEADER] = '1';
+  let body: BodyInit | undefined;
+  if (options.form) {
+    body = options.form;
+  } else if (options.body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify(options.body);
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, { method, headers, body, credentials: 'include' });
+  } catch {
+    throw { message: 'Could not reach the ProctorAI server. Check your connection.', code: 'NETWORK_ERROR', status: 0 };
+  }
+
+  if (response.status === 204) return undefined as T;
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/api/auth/')) {
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
+    throw { message: detailMessage(payload, response.status), code: errorCode(response.status), status: response.status };
+  }
+  return payload as T;
+}
+
+// ── Wire formats (snake_case, as the backend sends them) ──
+
+const ROLE_FROM_API: Record<string, Role> = {
+  admin: Role.Admin,
+  hod: Role.HOD,
+  teacher: Role.Teacher,
+  exam_controller: Role.ExamController,
+  student: Role.Student,
+};
+
+interface ApiUser {
+  id: string;
+  full_name: string;
   email: string;
-  fullName: string;
-  password: string;
-  createdAt: number;
-  expiresAt: number;
-  consumed: boolean;
+  role: string;
+  department: string;
+  registration_or_employee_no: string;
+  status: 'active' | 'disabled';
+  activated: boolean;
+  created_at: string;
+}
+
+function toUser(u: ApiUser): User {
+  const role = ROLE_FROM_API[u.role];
+  return {
+    id: u.id,
+    name: u.full_name,
+    email: u.email,
+    role,
+    department: u.department,
+    registrationNo: role === Role.Student ? u.registration_or_employee_no : undefined,
+    status: u.status === 'active' ? 'Active' : 'Inactive',
+    emailVerified: true,
+    createdAt: u.created_at,
+  };
+}
+
+// ── Auth API ───────────────────────────────
+
+/** Trades a verified Supabase (Google) access token for the app's session cookie. */
+export async function exchangeGoogleSession(supabaseAccessToken: string): Promise<ApiResponse<User>> {
+  const user = await request<ApiUser>('POST', '/api/auth/session', { body: { supabase_access_token: supabaseAccessToken } });
+  return { data: toUser(user) };
+}
+
+/** Who the httpOnly session cookie belongs to; 401 when there is no live session. */
+export async function getCurrentUser(): Promise<ApiResponse<User>> {
+  return { data: toUser(await request<ApiUser>('GET', '/api/auth/me')) };
+}
+
+export async function logout(): Promise<void> {
+  await request<void>('POST', '/api/auth/logout');
 }
 
 // ── Mutable in-memory stores ───────────────
@@ -57,7 +166,6 @@ let _auditLog = [...fixtureAuditLog];
 let _notifications = [...fixtureNotifications];
 let _examSchedule = [...fixtureExamSchedule];
 let _assignments = [...fixtureAssignments];
-let _pendingVerifications: PendingVerification[] = [];
 
 // ── Helpers ────────────────────────────────
 
@@ -74,135 +182,6 @@ function maybeError(): void {
 
 function generateId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-}
-
-// Validates the institutional email + local-part rule shared by signup and
-// resendVerification. Throws the same 422-shaped errors either mock consumer
-// would need to surface as input validation (these ARE meant to be visible —
-// they are not part of the identity-leak axis).
-function assertSelfServiceSignupEmail(email: string): string {
-  const atIdx = email.indexOf('@');
-  const localPart = atIdx === -1 ? email : email.slice(0, atIdx);
-  const domain = atIdx === -1 ? '' : email.slice(atIdx + 1);
-
-  if (domain !== ALLOWED_EMAIL_DOMAIN) {
-    throw { message: 'Please sign up with your university email.', code: 'INVALID_DOMAIN', status: 422 };
-  }
-  if (!STUDENT_LOCAL_PART_PATTERN.test(localPart)) {
-    throw {
-      message: 'This account type is created by an administrator — contact your department.',
-      code: 'STAFF_SIGNUP_BLOCKED',
-      status: 422,
-    };
-  }
-  return localPart;
-}
-
-function throwInvalidOrExpiredToken(): never {
-  throw { message: 'This link is invalid or has expired.', code: 'INVALID_TOKEN', status: 400 };
-}
-
-// ── Auth API ───────────────────────────────
-
-export async function login(email: string, _password: string): Promise<ApiResponse<User>> {
-  await delay();
-  const user = _users.find(u => u.email === email);
-  if (!user) throw { message: 'Invalid credentials', code: 'AUTH_ERROR', status: 401 };
-  if (user.emailVerified === false) {
-    throw { message: 'Please verify your email before signing in.', code: 'EMAIL_NOT_VERIFIED', status: 403 };
-  }
-  return { data: user };
-}
-
-export async function getCurrentUser(userId: string): Promise<ApiResponse<User>> {
-  await delay();
-  const user = _users.find(u => u.id === userId);
-  if (!user) throw { message: 'User not found', code: 'NOT_FOUND', status: 404 };
-  return { data: user };
-}
-
-// ── Signup / Email Verification API ────────
-// Mirrors the future backend contract: role is never client-supplied.
-// A 6-digit local part under ALLOWED_EMAIL_DOMAIN => self-service Student
-// signup. Anything else is staff, provisioned only by an Admin (no public
-// signup path). Responses never reveal whether an email already has an
-// account — every code path below resolves/throws identically regardless.
-
-export async function signup(fullName: string, email: string, _password: string): Promise<ApiResponse<{ message: string }>> {
-  await delay();
-  assertSelfServiceSignupEmail(email);
-
-  // Always create/refresh a pending verification record — this happens
-  // identically whether or not the email already belongs to an account, so
-  // it cannot be used to distinguish the two cases from the outside.
-  const token = generateId('vtok');
-  _pendingVerifications = _pendingVerifications.filter(p => p.email !== email);
-  _pendingVerifications.push({
-    token,
-    email,
-    fullName,
-    password: _password,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + 1000 * 60 * 30,
-    consumed: false,
-  });
-  // Dev convenience only (Phase 1 has no real email delivery); logged
-  // unconditionally so it can't leak account existence via timing/branching.
-  console.info(`[mock] Verification link for ${email}: /verify-email?token=${token}`);
-
-  return { data: { message: 'If this email is valid, a verification link has been sent.' } };
-}
-
-export async function verifyEmail(token: string): Promise<ApiResponse<{ message: string }>> {
-  await delay();
-  const idx = _pendingVerifications.findIndex(p => p.token === token);
-  if (idx === -1) throwInvalidOrExpiredToken();
-
-  const record = _pendingVerifications[idx];
-  if (record.consumed || Date.now() > record.expiresAt) throwInvalidOrExpiredToken();
-
-  _pendingVerifications[idx] = { ...record, consumed: true };
-
-  const existingIdx = _users.findIndex(u => u.email === record.email);
-  if (existingIdx !== -1) {
-    _users[existingIdx] = { ..._users[existingIdx], emailVerified: true };
-  } else {
-    const newUser: User = {
-      id: generateId('usr'),
-      name: record.fullName,
-      email: record.email,
-      role: Role.Student,
-      department: '',
-      registrationNo: record.email.split('@')[0],
-      status: 'Active',
-      emailVerified: true,
-      createdAt: new Date().toISOString(),
-    };
-    _users.push(newUser);
-  }
-
-  return { data: { message: 'Email verified — you can now sign in.' } };
-}
-
-export async function resendVerification(email: string): Promise<ApiResponse<{ message: string }>> {
-  await delay();
-  assertSelfServiceSignupEmail(email);
-
-  const token = generateId('vtok');
-  const existing = _pendingVerifications.find(p => p.email === email);
-  _pendingVerifications = _pendingVerifications.filter(p => p.email !== email);
-  _pendingVerifications.push({
-    token,
-    email,
-    fullName: existing?.fullName || '',
-    password: existing?.password || '',
-    createdAt: Date.now(),
-    expiresAt: Date.now() + 1000 * 60 * 30,
-    consumed: false,
-  });
-  console.info(`[mock] Verification link for ${email}: /verify-email?token=${token}`);
-
-  return { data: { message: 'If this email is valid, a verification link has been sent.' } };
 }
 
 // ── Users API ──────────────────────────────

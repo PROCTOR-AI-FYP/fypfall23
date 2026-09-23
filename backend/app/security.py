@@ -1,18 +1,17 @@
-"""Password hashing, JWT issuance/verification, and email-derived role logic.
+"""App session JWTs, the session cookie, and email-derived role logic.
 
-This module is the single place that decides what role an account gets from
-its email — routers must never accept a client-supplied role for the
-self-service path (see AGENTS.md / spec section 1).
+This module is the single place that decides what role a self-provisioned
+account gets from its email: only a six-digit local part (a registration
+number) is ever auto-provisioned, and only as a student. Staff roles come
+exclusively from an Admin (routers/admin_users.py).
 """
 from __future__ import annotations
 
-import hashlib
-import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import bcrypt
 import jwt
+from fastapi import Response
 
 from app.config import settings
 from app.models import STUDENT_LOCAL_PART_RE, Role
@@ -22,17 +21,8 @@ JWT_ROLE_CLAIM = "role"
 JWT_EXPIRY_CLAIM = "exp"
 
 
-def hash_password(raw_password: str) -> str:
-    salt = bcrypt.gensalt(rounds=settings.bcrypt_rounds)
-    return bcrypt.hashpw(raw_password.encode("utf-8"), salt).decode("utf-8")
-
-
-def verify_password(raw_password: str, password_hash: str) -> bool:
-    try:
-        return bcrypt.checkpw(raw_password.encode("utf-8"), password_hash.encode("utf-8"))
-    except ValueError:
-        # Malformed hash in storage; never treat as a match.
-        return False
+def normalize_email(email: str) -> str:
+    return email.strip().lower()
 
 
 def local_part_of(email: str) -> str:
@@ -53,40 +43,11 @@ def is_student_shaped_local_part(local_part: str) -> bool:
     return bool(STUDENT_LOCAL_PART_RE.match(local_part))
 
 
-def derive_role_for_signup(email: str) -> tuple[Role, str] | None:
-    """Self-service signup path: only ever returns (Role.STUDENT, reg_no) or None.
-
-    Returns None if the local part is not six digits, meaning this email
-    cannot self-register (spec section 1, step 2).
-    """
-    local_part = local_part_of(email)
-    if is_student_shaped_local_part(local_part):
-        return Role.STUDENT, local_part
-    return None
-
-
-def generate_verification_token() -> str:
-    return secrets.token_urlsafe(settings.verification_token_bytes)
-
-
-def hash_token(raw_token: str) -> str:
-    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
-
-
-def hash_email_for_rate_limit(email: str) -> str:
-    return hashlib.sha256(email.lower().encode("utf-8")).hexdigest()
-
-
-def verification_token_expiry() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(hours=settings.verification_token_ttl_hours)
-
-
 def create_access_token(*, user_id: str, role: Role) -> str:
-    """Issue a JWT whose role claim comes from the caller's argument only.
+    """Issue the app's own session JWT.
 
-    Callers (routers/auth.py::login) must always pass a role value that was
-    just read fresh from the users table — never a cached or client-supplied
-    value — so the claim reflects the account's true, current role.
+    The role claim is informational only: deps.get_current_user re-reads the
+    role (and account status) from the users table on every request.
     """
     now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {
@@ -99,4 +60,29 @@ def create_access_token(*, user_id: str, role: Role) -> str:
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
-    return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    return jwt.decode(
+        token,
+        settings.jwt_secret,
+        algorithms=[settings.jwt_algorithm],
+        options={"require": [JWT_SUBJECT_CLAIM, JWT_EXPIRY_CLAIM, "iat"]},
+    )
+
+
+def _cookie_attributes() -> dict[str, Any]:
+    return {
+        "httponly": True,
+        "secure": settings.session_cookie_secure,
+        "samesite": settings.session_cookie_samesite,
+        "domain": settings.session_cookie_domain or None,
+        "path": "/",
+    }
+
+
+def set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        settings.session_cookie_name, token, max_age=settings.jwt_expire_minutes * 60, **_cookie_attributes()
+    )
+
+
+def clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(settings.session_cookie_name, **_cookie_attributes())

@@ -59,13 +59,17 @@ async def upload_seatmap(
             continue
 
         student = await conn.fetchrow(
-            "SELECT id, email_verified FROM users WHERE registration_or_employee_no = $1 AND role = 'student'",
+            """
+            SELECT id, (supabase_user_id IS NOT NULL) AS activated FROM users
+            WHERE registration_or_employee_no = $1 AND role = 'student' AND deleted_at IS NULL
+            """,
             student_reg_no,
         )
 
         if student is None:
             row_status = SeatmapRowStatus.UNREGISTERED_ID
-        elif not student["email_verified"]:
+        elif not student["activated"]:
+            # The account exists but its owner has never signed in with Google.
             row_status = SeatmapRowStatus.UNVERIFIED
         else:
             row_status = SeatmapRowStatus.RESOLVED

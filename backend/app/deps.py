@@ -1,5 +1,5 @@
-"""FastAPI dependencies: client IP, plain DB connections, RLS-scoped DB
-connections, and JWT-authenticated current-user / role-gating dependencies.
+"""FastAPI dependencies: client IP, DB connections (plain and RLS-scoped),
+and the cookie-authenticated current user / role gates.
 """
 from __future__ import annotations
 
@@ -9,14 +9,11 @@ from collections.abc import AsyncIterator
 import asyncpg
 import jwt
 from fastapi import Depends, Header, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import settings
-from app.db import acquire_connection, acquire_rls_connection
-from app.models import Role
+from app.db import acquire_connection
+from app.models import Role, UserStatus
 from app.security import decode_access_token
-
-bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_client_ip(request: Request) -> str:
@@ -24,8 +21,7 @@ def get_client_ip(request: Request) -> str:
 
     Only the rightmost `trusted_proxy_hops` X-Forwarded-For entries are
     written by infrastructure we control; anything left of them is
-    client-supplied and would let an attacker rotate fake IPs past the
-    per-IP signup rate limit.
+    client-supplied and could be forged into the audit log.
     """
     hops = settings.trusted_proxy_hops
     if hops > 0:
@@ -44,7 +40,8 @@ async def require_internal_api_key(x_internal_api_key: str | None = Header(defau
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid internal API key")
 
 
-async def get_db(request: Request) -> AsyncIterator[asyncpg.Connection]:
+async def get_db() -> AsyncIterator[asyncpg.Connection]:
+    """One pooled connection per request, shared by every dependency that asks for it."""
     async with acquire_connection() as conn:
         yield conn
 
@@ -55,23 +52,37 @@ class CurrentUser:
         self.role = role
 
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> CurrentUser:
-    if credentials is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+def _unauthorized(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
+
+
+async def resolve_session_user(conn: asyncpg.Connection, token: str | None) -> CurrentUser:
+    """Validate an app session JWT and load the account it names.
+
+    The role and status come from the users table on every call, never from
+    the token: a disabled, deleted or re-roled account loses its old access
+    on its next request instead of when the token expires.
+    """
+    if not token:
+        raise _unauthorized("Not authenticated")
     try:
-        payload = decode_access_token(credentials.credentials)
+        payload = decode_access_token(token)
     except jwt.PyJWTError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from exc
+        raise _unauthorized("Invalid or expired session") from exc
 
     try:
-        role = Role(payload["role"])
-        user_id = payload["sub"]
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload") from exc
+        row = await conn.fetchrow(
+            "SELECT id, role, status, deleted_at FROM users WHERE id = $1::uuid", str(payload["sub"])
+        )
+    except (asyncpg.DataError, ValueError) as exc:
+        raise _unauthorized("Invalid session") from exc
+    if row is None or row["deleted_at"] is not None or row["status"] != UserStatus.ACTIVE.value:
+        raise _unauthorized("This account is no longer active")
+    return CurrentUser(user_id=str(row["id"]), role=Role(row["role"]))
 
-    return CurrentUser(user_id=user_id, role=role)
+
+async def get_current_user(request: Request, conn: asyncpg.Connection = Depends(get_db)) -> CurrentUser:
+    return await resolve_session_user(conn, request.cookies.get(settings.session_cookie_name))
 
 
 def require_role(*allowed_roles: Role):
@@ -84,15 +95,20 @@ def require_role(*allowed_roles: Role):
 
 
 require_admin = require_role(Role.ADMIN)
+require_any_role = require_role(*Role)
 
 
 async def get_rls_db(
     current_user: CurrentUser = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
 ) -> AsyncIterator[asyncpg.Connection]:
-    """DB connection with the RLS session GUCs set from the JWT of this request.
+    """The request's connection inside a transaction with the RLS GUCs set.
 
-    See app/db.py::acquire_rls_connection for how app.current_user_id and
-    app.current_role are populated and scoped to the transaction.
+    app.current_user_id / app.current_role are set transaction-locally (the
+    `true` argument), so they cannot leak to the next request that reuses the
+    pooled connection. The role is the one just read from the database.
     """
-    async with acquire_rls_connection(user_id=current_user.user_id, role=current_user.role.value) as conn:
+    async with conn.transaction():
+        await conn.execute("SELECT set_config('app.current_user_id', $1, true)", current_user.user_id)
+        await conn.execute("SELECT set_config('app.current_role', $1, true)", current_user.role.value)
         yield conn

@@ -1,5 +1,4 @@
-"""Redis client (Upstash in production), transport verification, and the
-signup/resend rate-limit primitive.
+"""Redis client (Upstash in production) and transport verification.
 
 Upstash plan choice (re-derive only if the deployment shape changes):
 Upstash's pay-as-you-go tier bills every command, including each command
@@ -77,17 +76,3 @@ async def verify_redis_transport() -> None:
     if settings.require_redis_tls and tls_version is None:
         raise InsecureRedisTransportError("REQUIRE_REDIS_TLS is set but the Redis connection is not encrypted.")
     logger.info("redis connected tls=%s", tls_version or "none")
-
-
-async def increment_and_check_limit(*, key: str, limit: int, window_seconds: int) -> bool:
-    """Increment a fixed-window counter; True while the count is within limit.
-
-    SET NX EX creates the key with its TTL only on the first hit of a window,
-    and INCR preserves that TTL, so this avoids EXPIRE's NX flag, which not
-    every Redis-compatible server supports.
-    """
-    pipe = get_redis().pipeline(transaction=False)
-    pipe.set(key, 0, ex=window_seconds, nx=True)
-    pipe.incr(key)
-    _, count = await pipe.execute()
-    return int(count) <= limit

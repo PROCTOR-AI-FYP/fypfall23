@@ -38,30 +38,37 @@ CREATE TABLE IF NOT EXISTS users (
     id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     full_name                   TEXT NOT NULL,
     email                       TEXT NOT NULL UNIQUE,
-    password_hash               TEXT NOT NULL,
+    password_hash               TEXT,
     role                        TEXT NOT NULL CHECK (role IN ('admin', 'hod', 'teacher', 'exam_controller', 'student')),
     registration_or_employee_no TEXT NOT NULL,
     status                      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
-    email_verified              BOOLEAN NOT NULL DEFAULT false,
     created_at                  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_reg_no_unique;
 ALTER TABLE users ADD CONSTRAINT users_reg_no_unique UNIQUE (registration_or_employee_no);
 
--- ---------------------------------------------------------------------------
--- email_verifications
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS email_verifications (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    token_hash   TEXT NOT NULL,          -- SHA-256 of the raw token
-    expires_at   TIMESTAMPTZ NOT NULL,
-    consumed_at  TIMESTAMPTZ,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+-- Google sign-in via Supabase Auth (migration from password auth).
+-- supabase_user_id is the verified token's `sub`, set on first sign-in
+-- ("activation"). It is deliberately NOT a foreign key to auth.users: that
+-- would need cross-schema grants for app_user, and matching the verified
+-- `sub` is all the linkage needs. password_hash is kept (nullable) only so
+-- existing rows migrate in place; no code reads or writes it.
+ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS supabase_user_id UUID UNIQUE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider TEXT NOT NULL DEFAULT 'google'
+    CHECK (auth_provider IN ('google', 'legacy_password'));
+ALTER TABLE users ADD COLUMN IF NOT EXISTS department TEXT NOT NULL DEFAULT '';
+-- Soft delete: rows referenced by cases, penalties and the audit trail are
+-- never physically removed.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+-- Google owns email verification now; "activated" (supabase_user_id set)
+-- replaces this flag.
+ALTER TABLE users DROP COLUMN IF EXISTS email_verified;
+-- Sign-in matches on the verified email case-insensitively.
+CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_idx ON users (lower(email));
 
-CREATE INDEX IF NOT EXISTS email_verifications_token_hash_idx ON email_verifications (token_hash);
+DROP TABLE IF EXISTS email_verifications;
 
 -- ---------------------------------------------------------------------------
 -- exam_sessions (minimal — full scheduling lives outside this spec's scope)
@@ -213,7 +220,7 @@ CREATE TRIGGER audit_log_append_only
 -- Grants for the non-superuser application role.
 -- ---------------------------------------------------------------------------
 GRANT SELECT, INSERT, UPDATE, DELETE ON
-    users, email_verifications, exam_sessions, seat_assignments, cases,
+    users, exam_sessions, seat_assignments, cases,
     detection_events, penalties
     TO app_user;
 REVOKE UPDATE, DELETE ON audit_log FROM app_user;
@@ -231,7 +238,7 @@ BEGIN
   FOREACH api_role IN ARRAY ARRAY['anon', 'authenticated'] LOOP
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = api_role) THEN
       EXECUTE format(
-        'REVOKE ALL ON users, email_verifications, exam_sessions, seat_assignments, '
+        'REVOKE ALL ON users, exam_sessions, seat_assignments, '
         'cases, detection_events, penalties, audit_log FROM %I', api_role);
       EXECUTE format('REVOKE ALL ON SEQUENCE case_reference_seq FROM %I', api_role);
     END IF;

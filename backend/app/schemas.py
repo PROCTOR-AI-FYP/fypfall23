@@ -1,8 +1,9 @@
 """Pydantic v2 request/response models.
 
-SignupRequest deliberately has extra="ignore" and no `role` field at all: a
-client sending role=admin (or anything else) has that field silently
-dropped, which is what proves signup can never produce a non-student role.
+Request models use extra="forbid": an unexpected field (a client-supplied
+role on a path that must derive it, a leftover password field) is a 422,
+never silently accepted. Response models never carry password_hash or
+supabase_user_id; account activation is exposed only as a boolean.
 """
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.models import (
     BehaviourType,
@@ -21,62 +22,24 @@ from app.models import (
     PenaltyType,
     Role,
     SeatmapRowStatus,
+    UserStatus,
 )
 
-BCRYPT_MAX_PASSWORD_BYTES = 72
-
-
-def _fits_bcrypt(password: str) -> str:
-    # bcrypt >= 5 raises on inputs over 72 bytes instead of truncating them.
-    if len(password.encode("utf-8")) > BCRYPT_MAX_PASSWORD_BYTES:
-        raise ValueError(f"Password must be at most {BCRYPT_MAX_PASSWORD_BYTES} bytes.")
-    return password
-
-
-NewPassword = Annotated[str, Field(min_length=8, max_length=BCRYPT_MAX_PASSWORD_BYTES), AfterValidator(_fits_bcrypt)]
 Score = Annotated[float, Field(ge=0.0, le=1.0)]
+FullName = Annotated[str, Field(min_length=1, max_length=200)]
+Department = Annotated[str, Field(max_length=120)]
 
 
-class SignupRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    full_name: str = Field(min_length=1, max_length=200)
-    email: EmailStr
-    password: NewPassword
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
-class SignupResponse(BaseModel):
-    message: str
+# --- Auth ---
 
 
-class VerifyEmailRequest(BaseModel):
-    token: str
-
-
-class VerifyEmailResponse(BaseModel):
-    message: str
-
-
-class ResendVerificationRequest(BaseModel):
-    email: EmailStr
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class LoginResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    role: Role
-
-
-class AdminCreateUserRequest(BaseModel):
-    full_name: str = Field(min_length=1, max_length=200)
-    email: EmailStr
-    password_or_send_setup_email: NewPassword
-    role: Role
+class SessionRequest(StrictModel):
+    # A Supabase access token is a JWT of a few hundred bytes to ~2 KB.
+    supabase_access_token: str = Field(min_length=1, max_length=8192)
 
 
 class UserOut(BaseModel):
@@ -84,10 +47,28 @@ class UserOut(BaseModel):
     full_name: str
     email: str
     role: Role
+    department: str
     registration_or_employee_no: str
-    status: str
-    email_verified: bool
+    status: UserStatus
+    # True once the account's owner has signed in with Google at least once.
+    activated: bool
     created_at: datetime
+
+
+class AdminCreateUserRequest(StrictModel):
+    full_name: FullName
+    email: EmailStr
+    role: Role
+    department: Department = ""
+    status: UserStatus = UserStatus.ACTIVE
+
+
+class AdminUpdateUserRequest(StrictModel):
+    full_name: FullName | None = None
+    email: EmailStr | None = None
+    role: Role | None = None
+    department: Department | None = None
+    status: UserStatus | None = None
 
 
 class SeatmapRowResult(BaseModel):

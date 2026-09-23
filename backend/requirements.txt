@@ -4,8 +4,9 @@ fastapi==0.141.1
 uvicorn[standard]==0.53.0
 asyncpg==0.31.0
 redis==8.1.0
-bcrypt==5.0.0
-PyJWT==2.14.0
+# [crypto] pulls in `cryptography`, needed to verify Supabase's ES256-signed access tokens.
+PyJWT[crypto]==2.14.0
+cryptography==50.0.1
 pydantic==2.13.5
 pydantic-settings==2.15.0
 python-dotenv==1.2.3

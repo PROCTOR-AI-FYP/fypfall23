@@ -2,13 +2,17 @@
 
 Secrets are read from the environment, never from arguments (shell history):
   REDIS_URL, MQTT_HOST, MQTT_USERNAME, MQTT_PASSWORD, INTERNAL_API_KEY,
-  E2E_TEACHER_PASSWORD (only with --e2e)
+  E2E_SESSION_COOKIE (only with --e2e)
 
     python scripts/verify_deployment.py --base-url https://api.example.up.railway.app \\
         --allowed-origin https://proctorai.vercel.app
     # add the end-to-end detection check (creates one real case in the given session):
-    python scripts/verify_deployment.py ... --e2e --teacher-email m.bilal@students.au.edu.pk \\
-        --session-id <in-progress session uuid> --room "Hall A"
+    python scripts/verify_deployment.py ... --e2e --session-id <in-progress session uuid> --room "Hall A"
+
+Sign-in is Google-only, so --e2e borrows a real session: sign in to the
+frontend as the session's invigilating teacher, copy the value of the
+`proctorai_session` cookie (DevTools -> Application -> Cookies) into
+E2E_SESSION_COOKIE. It expires with the session (JWT_EXPIRE_MINUTES).
 
 Exit code is non-zero if any check fails.
 """
@@ -34,6 +38,8 @@ from app.redis_client import negotiated_tls_version  # noqa: E402
 from app.services.mqtt import alert_topic  # noqa: E402
 
 FOREIGN_ORIGIN = "https://not-proctorai.example"
+SESSION_COOKIE_NAME = "proctorai_session"
+ALERT_EVENT = "alert:new"
 MQTT_TIMEOUT_SECONDS = 10.0
 EVENT_TIMEOUT_SECONDS = 15.0
 
@@ -107,18 +113,18 @@ async def mqtt_plaintext_rejected() -> str:
     raise AssertionError("plaintext connection on 1883 succeeded")
 
 
-async def end_to_end(base_url: str, teacher_email: str, session_id: str, room: str) -> str:
+async def end_to_end(base_url: str, allowed_origin: str, session_id: str, room: str) -> str:
+    cookie = {"Cookie": f"{SESSION_COOKIE_NAME}={require_env('E2E_SESSION_COOKIE')}"}
     async with httpx.AsyncClient(base_url=base_url, timeout=30) as http:
-        login = await http.post(
-            "/api/auth/login", json={"email": teacher_email, "password": require_env("E2E_TEACHER_PASSWORD")}
-        )
-        assert login.status_code == 200, f"login failed: {login.status_code}"
-        token = login.json()["access_token"]
+        me = await http.get("/api/auth/me", headers=cookie)
+        assert me.status_code == 200, f"session cookie rejected: {me.status_code}"
+        assert me.json()["role"] == "teacher", f"session belongs to a {me.json()['role']}, not a teacher"
 
         sio = socketio.AsyncClient()
         socket_event: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
-        sio.on("detection:new", lambda data: socket_event.done() or socket_event.set_result(data))
-        await sio.connect(base_url, auth={"token": token}, transports=["websocket"])
+        sio.on(ALERT_EVENT, lambda data: socket_event.done() or socket_event.set_result(data))
+        # A browser sends its Origin on the handshake; the server checks it.
+        await sio.connect(base_url, headers={**cookie, "Origin": allowed_origin}, transports=["websocket"])
         try:
             joined = await sio.call("join_session", {"session_id": session_id})
             assert joined == {"ok": True}, f"join_session: {joined}"
@@ -158,7 +164,6 @@ async def main() -> int:
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--allowed-origin", required=True)
     parser.add_argument("--e2e", action="store_true")
-    parser.add_argument("--teacher-email")
     parser.add_argument("--session-id")
     parser.add_argument("--room")
     args = parser.parse_args()
@@ -170,9 +175,12 @@ async def main() -> int:
     await check("MQTT connection is TLS on 8883", mqtt_tls)
     await check("MQTT plaintext 1883 is rejected", mqtt_plaintext_rejected)
     if args.e2e:
-        if not (args.teacher_email and args.session_id and args.room):
-            parser.error("--e2e needs --teacher-email, --session-id and --room")
-        await check("detection -> Socket.IO + MQTT", lambda: end_to_end(base_url, args.teacher_email, args.session_id, args.room))
+        if not (args.session_id and args.room):
+            parser.error("--e2e needs --session-id and --room (and E2E_SESSION_COOKIE in the environment)")
+        await check(
+            "detection -> Socket.IO + MQTT",
+            lambda: end_to_end(base_url, args.allowed_origin, args.session_id, args.room),
+        )
 
     for name, ok, evidence in results:
         print(f"[{'PASS' if ok else 'FAIL'}] {name}: {evidence}")

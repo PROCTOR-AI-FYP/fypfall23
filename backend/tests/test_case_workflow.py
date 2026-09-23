@@ -22,7 +22,7 @@ from tests.helpers import (
     SEEDED_SESSION_ID,
     STUDENT_A_EMAIL,
     TEACHER_EMAIL,
-    bearer,
+    auth,
     login,
 )
 
@@ -48,7 +48,7 @@ async def other_session_case(admin_conn: asyncpg.Connection) -> str:
 
 async def _transition(client: AsyncClient, token: str, case_id: str, to_status: str) -> int:
     response = await client.post(
-        f"/api/cases/{case_id}/transitions", headers=bearer(token), json={"to_status": to_status, "note": "reviewed"}
+        f"/api/cases/{case_id}/transitions", headers=auth(token), json={"to_status": to_status, "note": "reviewed"}
     )
     return response.status_code
 
@@ -75,7 +75,7 @@ async def test_teacher_cannot_see_or_touch_other_sessions(
 ) -> None:
     teacher = await login(client, TEACHER_EMAIL)
     assert await _transition(client, teacher, other_session_case, "confirmed") == 404
-    listed = await client.get("/api/cases", headers=bearer(teacher))
+    listed = await client.get("/api/cases", headers=auth(teacher))
     assert other_session_case not in {case["id"] for case in listed.json()}
 
 
@@ -128,15 +128,15 @@ async def test_penalty_generates_notice_with_exactly_one_api_call(
     hod = await login(client, HOD_EMAIL)
     body = {"penalty_type": "formal_warning", "description": "A formal warning is placed on file."}
 
-    issued = await client.post(f"/api/cases/{case_id}/penalty", headers=bearer(hod), json=body)
+    issued = await client.post(f"/api/cases/{case_id}/penalty", headers=auth(hod), json=body)
     assert issued.status_code == 201, issued.text
     assert issued.json()["notice_source"] == "anthropic"
     assert issued.json()["notice_reference"] == "AU-CS-INT-2026-014"
 
     for _ in range(2):
-        fetched = await client.get(f"/api/cases/{case_id}/penalty", headers=bearer(hod))
+        fetched = await client.get(f"/api/cases/{case_id}/penalty", headers=auth(hod))
         assert fetched.json()["notice_document"] == issued.json()["notice_document"]
-    repeat = await client.post(f"/api/cases/{case_id}/penalty", headers=bearer(hod), json=body)
+    repeat = await client.post(f"/api/cases/{case_id}/penalty", headers=auth(hod), json=body)
     assert repeat.status_code == 409
 
     assert len(fake_claude.calls) == 1
@@ -157,7 +157,7 @@ async def test_failed_generation_falls_back_to_template_without_retrying(
     case_id = await _confirmed_case(client, admin_conn)
     response = await client.post(
         f"/api/cases/{case_id}/penalty",
-        headers=bearer(await login(client, HOD_EMAIL)),
+        headers=auth(await login(client, HOD_EMAIL)),
         json={"penalty_type": "mark_deduction", "description": "10% deducted from the final paper."},
     )
     assert response.status_code == 201
@@ -171,9 +171,9 @@ async def test_penalty_rules(client: AsyncClient, admin_conn: asyncpg.Connection
     case_id = await _case_id(admin_conn, "AU-CS-INT-2026-014")
     body = {"penalty_type": "formal_warning", "description": "Warning."}
     hod = await login(client, HOD_EMAIL)
-    assert (await client.post(f"/api/cases/{case_id}/penalty", headers=bearer(hod), json=body)).status_code == 409
+    assert (await client.post(f"/api/cases/{case_id}/penalty", headers=auth(hod), json=body)).status_code == 409
     teacher = await login(client, TEACHER_EMAIL)
-    assert (await client.post(f"/api/cases/{case_id}/penalty", headers=bearer(teacher), json=body)).status_code == 403
+    assert (await client.post(f"/api/cases/{case_id}/penalty", headers=auth(teacher), json=body)).status_code == 403
     assert fake_claude.calls == []
 
 

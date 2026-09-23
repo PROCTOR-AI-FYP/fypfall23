@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings, validate_settings
+from app.csrf import CSRF_HEADER, CSRFMiddleware
 from app.db import close_pool, init_pool
 from app.redis_client import close_redis, init_redis, verify_redis_transport
 from app.routers import admin_users, auth, cases, internal, media, sessions
@@ -65,16 +66,21 @@ app = FastAPI(
 )
 
 def cors_options(origins: list[str]) -> dict[str, Any]:
-    # Bearer tokens, not cookies, so credentials stay off.
+    # The session is an httpOnly cookie, so credentials must be allowed; that
+    # is only safe because origins are an exact allowlist (wildcards are
+    # refused at startup) and unsafe methods also need the CSRF header.
     return {
         "allow_origins": origins,
-        "allow_credentials": False,
-        "allow_methods": ["GET", "POST", "PATCH", "DELETE"],
-        "allow_headers": ["Authorization", "Content-Type"],
+        "allow_credentials": True,
+        "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+        "allow_headers": ["Content-Type", CSRF_HEADER],
         "max_age": 600,
     }
 
 
+# Starlette runs the last-added middleware first: CORS answers preflights
+# before the CSRF check sees the request.
+app.add_middleware(CSRFMiddleware, allowed_origins=settings.cors_origins)
 app.add_middleware(CORSMiddleware, **cors_options(settings.cors_origins))
 
 app.include_router(auth.router)

@@ -7,8 +7,6 @@ import { Role } from './lib/types';
 import { AppShell } from './components/layout/AppShell';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { LoginPage } from './pages/Login';
-import { SignupPage } from './pages/Signup';
-import { VerifyEmailPage } from './pages/VerifyEmail';
 
 // Admin
 import { AdminDashboard } from './pages/admin/Dashboard';
@@ -48,8 +46,6 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/signup" element={<SignupPage />} />
-            <Route path="/verify-email" element={<VerifyEmailPage />} />
 
             <Route element={<AppShell />}>
               {/* Admin Routes */}
