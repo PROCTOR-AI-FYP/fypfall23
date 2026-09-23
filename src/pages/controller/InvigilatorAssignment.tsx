@@ -4,8 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { FormField, Select } from '@/components/ui/FormElements';
 import * as api from '@/lib/api';
-import { users } from '@/lib/fixtures';
-import type { InvigilatorAssignment, ExamScheduleEntry } from '@/lib/types';
+import type { InvigilatorAssignment, ExamScheduleEntry, User } from '@/lib/types';
 import { Role } from '@/lib/types';
 
 export function InvigilatorAssignment() {
@@ -16,12 +15,14 @@ export function InvigilatorAssignment() {
   const [selectedExam, setSelectedExam] = useState('');
   const [selectedTeacher, setSelectedTeacher] = useState('');
   const [saving, setSaving] = useState(false);
+  const [teachers, setTeachers] = useState<User[]>([]);
 
   const load = () => {
     setLoading(true);
-    Promise.all([api.getAssignments(), api.getExamSchedule()]).then(([aRes, eRes]) => {
+    Promise.all([api.getAssignments(), api.getExamSchedule(), api.getUsers({ role: Role.Teacher, status: 'Active' })]).then(([aRes, eRes, tRes]) => {
       setAssignments(aRes.data);
       setExams(eRes.data.filter(e => !e.invigilatorId)); // Only unassigned exams
+      setTeachers(tRes.data);
       setLoading(false);
     });
   };
@@ -43,8 +44,6 @@ export function InvigilatorAssignment() {
     { key: 'classroomName', header: 'Room', sortable: true },
     { key: 'status', header: 'Status', render: a => <span className="px-2 py-0.5 rounded-[2px] bg-(--color-success-subtle) text-(--color-success) text-label font-medium">{a.status}</span> },
   ];
-
-  const teachers = users.filter(u => u.role === Role.Teacher);
 
   return (
     <div>

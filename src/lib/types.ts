@@ -61,7 +61,8 @@ export interface User {
   registrationNo?: string; // Students only
   status: 'Active' | 'Inactive';
   avatarUrl?: string;
-  emailVerified?: boolean; // defaults to true for pre-provisioned/legacy accounts
+  emailVerified?: boolean; // Google verifies ownership; always true for real accounts
+  activated?: boolean; // false until the account's owner first signs in with Google
   createdAt: string;
 }
 
@@ -146,7 +147,7 @@ export interface TimelineEntry {
   id: string;
   action: string;
   actorName: string;
-  actorRole: Role;
+  actorRole: Role | null; // null for automated (system) events
   details?: string;
   timestamp: string;
 }
@@ -219,7 +220,7 @@ export interface AuditLogEntry {
   timestamp: string;
   userId: string;
   userName: string;
-  userRole: Role;
+  userRole: Role | null; // null for automated (system) events
   action: string;
   target: string;
   details: string;

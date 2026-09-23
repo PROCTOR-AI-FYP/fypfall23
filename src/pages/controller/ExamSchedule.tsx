@@ -5,8 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { FormField, Input, Select } from '@/components/ui/FormElements';
 import * as api from '@/lib/api';
-import { classrooms } from '@/lib/fixtures';
-import type { ExamScheduleEntry } from '@/lib/types';
+import type { Classroom, ExamScheduleEntry } from '@/lib/types';
 import { SessionStatus } from '@/lib/types';
 
 export function ExamSchedule() {
@@ -16,12 +15,15 @@ export function ExamSchedule() {
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ courseCode: '', courseName: '', date: '', startTime: '', endTime: '', classroomId: '' });
+  const [classrooms, setClassrooms] = useState<Classroom[]>([]);
 
   const load = () => {
     setLoading(true);
+    setError('');
     api.getExamSchedule().then(r => { setExams(r.data); setLoading(false); }).catch(e => { setError(e.message); setLoading(false); });
   };
   useEffect(() => { load(); }, []);
+  useEffect(() => { api.getClassrooms().then(r => setClassrooms(r.data)).catch(e => setError(e.message)); }, []);
 
   const handleCreate = async () => {
     if (!form.courseCode || !form.classroomId) return;
@@ -31,8 +33,8 @@ export function ExamSchedule() {
       await api.createExam({ ...form, classroomName: cls?.name || '', department: 'Computer Science', status: SessionStatus.Scheduled });
       setModalOpen(false);
       load();
-    } catch {
-      setError('Failed to create');
+    } catch (e) {
+      setError((e as { message?: string }).message || 'Failed to create');
     }
     setSaving(false);
   };

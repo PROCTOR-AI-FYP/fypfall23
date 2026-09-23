@@ -1,19 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { FormField, Select, Input } from '@/components/ui/FormElements';
 import { Upload, Play, CheckCircle2, AlertTriangle, Clock } from 'lucide-react';
 import * as api from '@/lib/api';
-import { classrooms } from '@/lib/fixtures';
-import { Role } from '@/lib/types';
+import type { Classroom } from '@/lib/types';
 
-type SeatRowStatus = 'Resolved' | 'Unregistered ID' | 'Unverified';
-
-interface SeatRow {
-  seatNumber: string;
-  studentRegNo: string;
-  status: SeatRowStatus;
-}
+type SeatRow = api.SeatMapPreviewRow;
+type SeatRowStatus = SeatRow['status'];
 
 const statusStyles: Record<SeatRowStatus, string> = {
   Resolved: 'bg-(--color-success-subtle) text-(--color-success)',
@@ -32,52 +26,37 @@ export function SessionSetup() {
   const [classroomId, setClassroomId] = useState('');
   const [silentMode, setSilentMode] = useState(false);
   const [seatRows, setSeatRows] = useState<SeatRow[]>([]);
+  const [seatFile, setSeatFile] = useState<File | null>(null);
   const [csvError, setCsvError] = useState('');
   const [resolving, setResolving] = useState(false);
   const [starting, setStarting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [classrooms, setClassrooms] = useState<Classroom[]>([]);
+
+  useEffect(() => {
+    api.getClassrooms()
+      .then(res => setClassrooms(res.data))
+      .catch(err => setErrors(prev => ({ ...prev, classroom: (err as { message?: string }).message || 'Could not load classrooms' })));
+  }, []);
 
   const allResolved = seatRows.length > 0 && seatRows.every(r => r.status === 'Resolved');
 
-  const handleCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCsvUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setCsvError('');
     setSeatRows([]);
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const text = ev.target?.result as string;
-      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-      if (lines.length < 2) {
-        setCsvError('CSV is empty or missing data rows');
-        return;
-      }
-      const header = lines[0].split(',').map(h => h.trim().toLowerCase());
-      const seatIdx = header.findIndex(h => h.includes('seat'));
-      const regIdx = header.findIndex(h => h.includes('reg'));
-      const dataLines = lines.slice(1);
-
-      setResolving(true);
-      try {
-        const { data: allUsers } = await api.getUsers();
-        const rows: SeatRow[] = dataLines.map(line => {
-          const cells = line.split(',').map(c => c.trim());
-          const seatNumber = seatIdx >= 0 ? cells[seatIdx] : cells[0];
-          const studentRegNo = regIdx >= 0 ? cells[regIdx] : cells[1];
-          const match = allUsers.find(u => u.role === Role.Student && u.registrationNo === studentRegNo);
-          let status: SeatRowStatus;
-          if (!match) status = 'Unregistered ID';
-          else if (match.emailVerified === false) status = 'Unverified';
-          else status = 'Resolved';
-          return { seatNumber, studentRegNo, status };
-        });
-        setSeatRows(rows);
-      } catch {
-        setCsvError('Failed to resolve seat map against registered students');
-      }
-      setResolving(false);
-    };
-    reader.readAsText(file);
+    setSeatFile(null);
+    setResolving(true);
+    try {
+      // Resolved server-side against registered, signed-in student accounts.
+      const res = await api.previewSeatMap(file);
+      setSeatRows(res.data);
+      setSeatFile(file);
+    } catch (err) {
+      setCsvError((err as { message?: string }).message || 'Failed to resolve seat map against registered students');
+    }
+    setResolving(false);
   };
 
   const handleStart = async () => {
@@ -88,19 +67,14 @@ export function SessionSetup() {
     if (Object.keys(e).length > 0) return;
 
     setStarting(true);
-    const cls = classrooms.find(c => c.id === classroomId);
-    const res = await api.createSession({
-      classroomId,
-      classroomName: cls?.name || '',
-      courseCode: 'CS-301',
-      courseName: 'Database Systems',
-      invigilatorId: 'current',
-      invigilatorName: 'Current Teacher',
-      silentMode,
-      totalSeats: cls?.capacity || 30,
-      occupiedSeats: Math.floor((cls?.capacity || 30) * 0.8),
-    });
-    navigate(`/teacher/live-monitor/${res.data.id}`);
+    try {
+      // The backend starts this teacher's exam scheduled today in this room.
+      const res = await api.createSession({ classroomId, silentMode }, seatFile ?? undefined);
+      navigate(`/teacher/live-monitor/${res.data.id}`);
+    } catch (err) {
+      setErrors({ classroom: (err as { message?: string }).message || 'Could not start the session' });
+      setStarting(false);
+    }
   };
 
   const onlineClassrooms = classrooms.filter(c => c.cameraStatus === 'Online');
@@ -193,15 +167,6 @@ export function SessionSetup() {
           <Button onClick={handleStart} loading={starting} size="lg" disabled={seatRows.length > 0 && !allResolved}>
             <Play size={16} /> Start proctoring session
           </Button>
-        </div>
-
-        {/* Quick demo link */}
-        <div className="pt-4 border-t border-(--color-border-default)">
-          <p className="text-label text-(--color-warning) mb-2">Dev: Quick access</p>
-          <button onClick={() => navigate('/teacher/live-monitor/ses-001')}
-            className="text-body-sm text-(--color-accent-primary) hover:underline cursor-pointer">
-            Open active demo session (CS-301 in LH-4)
-          </button>
         </div>
       </div>
     </div>

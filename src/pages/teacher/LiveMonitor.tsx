@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/Button';
 import { BehaviorChip } from '@/components/ui/Chips';
 import { ConfidenceBar, LoadingState } from '@/components/ui/DataDisplay';
 import * as api from '@/lib/api';
-import { MockSocketEmitter } from '@/lib/mock-socket';
 import { type ExamSession, type DetectionEvent } from '@/lib/types';
 
 export function LiveMonitor() {
@@ -14,7 +13,7 @@ export function LiveMonitor() {
   const [detections, setDetections] = useState<DetectionEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<'2d' | '3d'>('2d');
-  const socketRef = useRef<MockSocketEmitter | null>(null);
+  const unsubscribeRef = useRef<(() => void) | null>(null);
 
   // Seat suspicion map from detections
   const seatScores = useCallback(() => {
@@ -43,21 +42,23 @@ export function LiveMonitor() {
       setLoading(false);
     }).catch(() => setLoading(false));
 
-    // Start mock socket
-    const socket = new MockSocketEmitter(id);
-    socketRef.current = socket;
-    socket.on('detection', (event: DetectionEvent) => {
-      setDetections(prev => [event, ...prev]);
-    });
-    socket.startSimulation();
+    // Live alerts for this session (Socket.IO, alert:new)
+    const unsubscribe = api.subscribeToAlerts(
+      (event: DetectionEvent) => {
+        if (event.sessionId !== id) return;
+        setDetections(prev => (prev.some(d => d.id === event.id) ? prev : [event, ...prev]));
+      },
+      { sessionId: id },
+    );
+    unsubscribeRef.current = unsubscribe;
 
-    return () => { socket.disconnect(); };
+    return () => { unsubscribe(); };
   }, [id]);
 
   const handleEndSession = async () => {
     if (!id) return;
     await api.endSession(id);
-    socketRef.current?.stopSimulation();
+    unsubscribeRef.current?.();
     setSession(prev => prev ? { ...prev, status: 'Completed' as ExamSession['status'] } : null);
   };
 

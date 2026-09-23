@@ -2,17 +2,57 @@ import { useEffect, useState } from 'react';
 import { Users, Building2, ShieldCheck, Activity } from 'lucide-react';
 import { StatCard } from '@/components/ui/DataDisplay';
 import * as api from '@/lib/api';
-import type { AuditLogEntry } from '@/lib/types';
+import { type AuditLogEntry, SessionStatus } from '@/lib/types';
+
+interface AdminStats {
+  users: number;
+  userGrowth?: number;
+  activeSessions: number;
+  casesToday: number;
+  caseTrend?: number;
+  camerasOnline: string;
+}
+
+function percentChange(current: number, previous: number): number | undefined {
+  return previous > 0 ? Math.round(((current - previous) / previous) * 100) : undefined;
+}
+
+function sameDay(iso: string, day: Date): boolean {
+  return new Date(iso).toDateString() === day.toDateString();
+}
 
 export function AdminDashboard() {
   const [recentActivity, setRecentActivity] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<AdminStats | null>(null);
 
   useEffect(() => {
     api.getAuditLog().then(res => {
       setRecentActivity(res.data.slice(0, 5));
       setLoading(false);
     }).catch(() => setLoading(false));
+
+    Promise.all([api.getUsers(), api.getSessions({ status: SessionStatus.InProgress }), api.getCases(), api.getClassrooms()])
+      .then(([usersRes, sessionsRes, casesRes, classroomsRes]) => {
+        const now = new Date();
+        const yesterday = new Date(now.getTime() - 86_400_000);
+        const newThisMonth = usersRes.data.filter(u => {
+          const created = new Date(u.createdAt);
+          return created.getFullYear() === now.getFullYear() && created.getMonth() === now.getMonth();
+        }).length;
+        const casesToday = casesRes.data.filter(c => sameDay(c.createdAt, now)).length;
+        const casesYesterday = casesRes.data.filter(c => sameDay(c.createdAt, yesterday)).length;
+        const online = classroomsRes.data.filter(c => c.cameraStatus === 'Online').length;
+        setStats({
+          users: usersRes.total,
+          userGrowth: percentChange(usersRes.total, usersRes.total - newThisMonth),
+          activeSessions: sessionsRes.total,
+          casesToday,
+          caseTrend: percentChange(casesToday, casesYesterday),
+          camerasOnline: `${online}/${classroomsRes.total}`,
+        });
+      })
+      .catch(() => { /* cards keep their placeholder */ });
   }, []);
 
   return (
@@ -21,10 +61,10 @@ export function AdminDashboard() {
 
       {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard icon={<Users size={18} />} label="Total users" value="22" trend={{ value: 8, label: 'this month' }} />
-        <StatCard icon={<Activity size={18} />} label="Active sessions" value="1" color="var(--color-success)" />
-        <StatCard icon={<ShieldCheck size={18} />} label="Cases today" value="4" color="var(--color-warning)" trend={{ value: 12, label: 'vs yesterday' }} />
-        <StatCard icon={<Building2 size={18} />} label="Classrooms online" value="7/10" color="var(--color-behavior-head)" />
+        <StatCard icon={<Users size={18} />} label="Total users" value={stats?.users ?? '—'} trend={stats?.userGrowth !== undefined ? { value: stats.userGrowth, label: 'this month' } : undefined} />
+        <StatCard icon={<Activity size={18} />} label="Active sessions" value={stats?.activeSessions ?? '—'} color="var(--color-success)" />
+        <StatCard icon={<ShieldCheck size={18} />} label="Cases today" value={stats?.casesToday ?? '—'} color="var(--color-warning)" trend={stats?.caseTrend !== undefined ? { value: stats.caseTrend, label: 'vs yesterday' } : undefined} />
+        <StatCard icon={<Building2 size={18} />} label="Classrooms online" value={stats?.camerasOnline ?? '—'} color="var(--color-behavior-head)" />
       </div>
 
       {/* Recent activity */}

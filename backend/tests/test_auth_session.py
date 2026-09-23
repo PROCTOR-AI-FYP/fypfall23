@@ -24,6 +24,8 @@ from jwt.exceptions import PyJWKClientConnectionError
 from app import supabase_auth
 from app.config import settings
 from app.csrf import CSRF_HEADER
+from app.models import Role
+from app.security import create_access_token
 from tests.helpers import CSRF_HEADERS, STUDENT_A_EMAIL, TEACHER_EMAIL
 
 SUPABASE_URL = "https://testproject.supabase.co"
@@ -160,6 +162,12 @@ async def test_relink_to_a_different_identity_is_rejected_and_audited(
     assert events[0]["target"] == STUDENT_A_EMAIL
     assert '"relink_rejected"' in events[0]["new_value"] and intruder in events[0]["new_value"]
     assert await _audit(admin_conn, "sign_in") == []
+    # Recorded for investigation, but the audit-log API never returns the identity.
+    admin_token = create_access_token(
+        user_id=str(await admin_conn.fetchval("SELECT id FROM users WHERE role = 'admin'")), role=Role.ADMIN
+    )
+    listed = await client.get("/api/admin/audit-log", headers={"Cookie": f"{settings.session_cookie_name}={admin_token}"})
+    assert intruder not in listed.text and "relink_rejected" in listed.text
 
 
 async def test_identity_already_linked_elsewhere_cannot_activate_or_provision(

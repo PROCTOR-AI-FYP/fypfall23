@@ -19,15 +19,20 @@ export function AlertInbox() {
 
   const load = () => {
     setLoading(true);
-    // In a real app, this would get all alerts for the teacher. 
-    // Here we'll just fetch from the first session for mock purposes.
-    api.getDetectionEvents('ses-001').then(r => { 
+    setError('');
+    // Every alert from the sessions this teacher invigilates.
+    api.getDetectionEvents().then(r => {
       setAlerts(r.data.filter(d => d.status === 'New' || d.status === 'Reviewed'));
-      setLoading(false); 
+      setLoading(false);
     }).catch(e => { setError(e.message); setLoading(false); });
   };
-  
+
   useEffect(() => { load(); }, []);
+
+  // New alerts arrive live (Socket.IO alert:new), no refresh needed.
+  useEffect(() => api.subscribeToAlerts(event => {
+    setAlerts(prev => (prev.some(a => a.id === event.id) ? prev : [event, ...prev]));
+  }), []);
 
   const handleConfirm = async () => {
     if (!selectedAlert) return;

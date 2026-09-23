@@ -19,15 +19,21 @@ from app.services.detection import forget_detection_config
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 AUDIT_PAGE_LIMIT = 500
-# Keys whose values are identifiers or free text better left to the row detail.
-_DETAIL_SKIP = {"detection_ids"}
+# Never shown in the summary: internal identifiers (the row's target already
+# names the object) and the Google identity presented at a rejected sign-in,
+# which stays in the database for investigation but is not returned by the API.
+_DETAIL_SKIP = {"presented_sub"}
+# jsonb stores keys in its own order; read them in a natural one.
+_DETAIL_ORDER = ["outcome", "from", "to", "via", "decision", "role", "department", "status", "course_code", "date"]
 
 
 def _details(new_value: Any) -> str:
     value = json.loads(new_value) if isinstance(new_value, str) else dict(new_value or {})
+    keys = sorted(value, key=lambda k: _DETAIL_ORDER.index(k) if k in _DETAIL_ORDER else len(_DETAIL_ORDER))
     parts = []
-    for key, item in value.items():
-        if key in _DETAIL_SKIP or item in (None, "", [], {}):
+    for key in keys:
+        item = value[key]
+        if key in _DETAIL_SKIP or key.endswith(("_id", "_ids")) or item in (None, "", [], {}):
             continue
         parts.append(f"{key.replace('_', ' ')}: {item if not isinstance(item, (list, dict)) else json.dumps(item)}")
     return "; ".join(parts)

@@ -122,11 +122,15 @@ export function UserManagement() {
       </span>
     )},
     { key: 'department', header: 'Department', sortable: true },
-    { key: 'status', header: 'Status', render: (u) => (
-      <span className={`px-2 py-0.5 rounded-[2px] text-label font-medium ${u.status === 'Active' ? 'bg-(--color-success-subtle) text-(--color-success)' : 'bg-(--color-bg-surface-raised) text-(--color-text-muted)'}`}>
-        {u.status}
-      </span>
-    )},
+    { key: 'status', header: 'Status', render: (u) => {
+      // An account activates on its owner's first Google sign-in.
+      const signedIn = u.status === 'Active' && u.activated !== false;
+      return (
+        <span className={`px-2 py-0.5 rounded-[2px] text-label font-medium ${signedIn ? 'bg-(--color-success-subtle) text-(--color-success)' : 'bg-(--color-bg-surface-raised) text-(--color-text-muted)'}`}>
+          {u.status === 'Active' && u.activated === false ? 'Not yet signed in' : u.status}
+        </span>
+      );
+    }},
     { key: 'actions', header: '', width: '120px', render: (u) => (
       <div className="flex items-center gap-1">
         <button onClick={(e) => { e.stopPropagation(); openEdit(u); }} className="px-2 py-1 text-label text-(--color-accent-primary) hover:bg-(--color-accent-primary-subtle) rounded-[4px] transition-colors cursor-pointer">

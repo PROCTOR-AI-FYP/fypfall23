@@ -2,16 +2,20 @@ import { useEffect, useState } from 'react';
 import { Shield, FileText, Scale, AlertTriangle } from 'lucide-react';
 import { StatCard } from '@/components/ui/DataDisplay';
 import * as api from '@/lib/api';
-import { CaseStatus } from '@/lib/types';
+import { type Case, BehaviorType, CaseStatus } from '@/lib/types';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+
+const TREND_DAYS = 8;
 
 export function HodDashboard() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ pending: 0, confirmed: 0, appeals: 0, dismissed: 0 });
+  const [cases, setCases] = useState<Case[]>([]);
 
   useEffect(() => {
     Promise.all([api.getCases(), api.getAppeals()]).then(([casesRes, appealsRes]) => {
       const cases = casesRes.data;
+      setCases(cases);
       setStats({
         pending: cases.filter(c => c.status === CaseStatus.PendingReview).length,
         confirmed: cases.filter(c => c.status === CaseStatus.Confirmed).length,
@@ -22,24 +26,28 @@ export function HodDashboard() {
     }).catch(() => setLoading(false));
   }, []);
 
+  const countBehavior = (type: BehaviorType) => cases.filter(c => c.behaviourTypes.includes(type)).length;
+
   const statusData = [
     { name: 'Pending', value: stats.pending, color: 'var(--color-status-pending)' },
     { name: 'Confirmed', value: stats.confirmed, color: 'var(--color-status-confirmed)' },
     { name: 'Dismissed', value: stats.dismissed, color: 'var(--color-status-dismissed)' },
   ];
 
-  const trendData = [
-    { date: 'Sep 15', cases: 3 }, { date: 'Sep 16', cases: 1 }, { date: 'Sep 17', cases: 4 },
-    { date: 'Sep 18', cases: 2 }, { date: 'Sep 19', cases: 5 }, { date: 'Sep 20', cases: 7 },
-    { date: 'Sep 21', cases: 3 }, { date: 'Sep 22', cases: 4 },
-  ];
+  const trendData = Array.from({ length: TREND_DAYS }, (_, i) => {
+    const day = new Date(Date.now() - (TREND_DAYS - 1 - i) * 86_400_000);
+    return {
+      date: day.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+      cases: cases.filter(c => new Date(c.createdAt).toDateString() === day.toDateString()).length,
+    };
+  });
 
   const behaviorData = [
-    { name: 'Gaze', count: 5, color: 'var(--color-behavior-gaze)' },
-    { name: 'Head Pose', count: 3, color: 'var(--color-behavior-head)' },
-    { name: 'Lip Mvmt', count: 2, color: 'var(--color-behavior-lip)' },
-    { name: 'Phone', count: 4, color: 'var(--color-behavior-phone)' },
-    { name: 'Object', count: 2, color: 'var(--color-behavior-object)' },
+    { name: 'Gaze', count: countBehavior(BehaviorType.GazeDeviation), color: 'var(--color-behavior-gaze)' },
+    { name: 'Head Pose', count: countBehavior(BehaviorType.HeadPoseViolation), color: 'var(--color-behavior-head)' },
+    { name: 'Lip Mvmt', count: countBehavior(BehaviorType.LipMovement), color: 'var(--color-behavior-lip)' },
+    { name: 'Phone', count: countBehavior(BehaviorType.PhoneDetected), color: 'var(--color-behavior-phone)' },
+    { name: 'Object', count: countBehavior(BehaviorType.UnauthorisedObject), color: 'var(--color-behavior-object)' },
   ];
 
   if (loading) return <div className="flex justify-center py-16"><div className="h-8 w-8 border-2 border-(--color-accent-primary) border-t-transparent rounded-full animate-spin" /></div>;

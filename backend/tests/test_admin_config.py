@@ -105,6 +105,7 @@ async def test_audit_log_reader_labels_and_filters(client: AsyncClient) -> None:
     assert "role: teacher" in created["details"]
     system = next(e for e in entries if e["action_code"] == "sign_in")
     assert system["user_name"] == "System" and system["user_role"] is None
+    assert system["details"].startswith("outcome: invalid_token")
 
     by_label = (await client.get("/api/admin/audit-log", params={"action": "Created user"}, headers=admin)).json()
     by_code = (await client.get("/api/admin/audit-log", params={"action": "admin_create_user"}, headers=admin)).json()
