@@ -30,13 +30,15 @@ logger = logging.getLogger("proctorai.retention")
 PURGE_BATCH_SIZE = 500
 RETENTION_LOCK_KEY = "lock:evidence-retention"
 
-# Review is final when the case was dismissed (plus a grace period), or a
-# penalty was issued and the appeal window has closed. When appeals are
-# stored server-side, add "and no appeal is open" here; this is the only
-# place the rule lives.
+# Review is final when the case was dismissed (plus a grace period; an
+# accepted appeal also dismisses), or a penalty was issued, the appeal window
+# has closed and no appeal is still open. This is the only place the rule lives.
 REVIEW_FINAL_SQL = """
-    (c.status = 'dismissed' AND c.updated_at < now() - make_interval(hours => $1))
-    OR (c.status = 'confirmed' AND p.created_at < now() - make_interval(days => $2))
+    (
+        (c.status = 'dismissed' AND c.updated_at < now() - make_interval(hours => $1))
+        OR (c.status = 'confirmed' AND p.created_at < now() - make_interval(days => $2))
+    )
+    AND NOT EXISTS (SELECT 1 FROM appeals ap WHERE ap.case_id = c.id AND ap.status = 'open')
 """
 
 

@@ -21,7 +21,21 @@ from app.config import settings, validate_settings
 from app.csrf import CSRF_HEADER, CSRFMiddleware
 from app.db import close_pool, init_pool
 from app.redis_client import close_redis, init_redis, verify_redis_transport
-from app.routers import admin_users, auth, cases, internal, media, sessions
+from app.routers import (
+    admin_config,
+    admin_users,
+    appeals,
+    auth,
+    cases,
+    classrooms,
+    detections,
+    internal,
+    media,
+    notifications,
+    reports,
+    schedule,
+    sessions,
+)
 from app.services.mqtt import mqtt_service
 from app.services.media import ffmpeg_available
 from app.services.retention import run_retention_loop
@@ -85,8 +99,15 @@ app.add_middleware(CORSMiddleware, **cors_options(settings.cors_origins))
 
 app.include_router(auth.router)
 app.include_router(admin_users.router)
+app.include_router(admin_config.router)
+app.include_router(classrooms.router)
 app.include_router(sessions.router)
+app.include_router(schedule.router)
+app.include_router(detections.router)
 app.include_router(cases.router)
+app.include_router(appeals.router)
+app.include_router(notifications.router)
+app.include_router(reports.router)
 app.include_router(internal.router)
 app.include_router(media.internal_router)
 app.include_router(media.router)

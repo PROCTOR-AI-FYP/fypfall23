@@ -71,5 +71,34 @@ class NoticeSource(str, Enum):
     TEMPLATE = "template"
 
 
+class AppealStatus(str, Enum):
+    OPEN = "open"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
+class CameraStatus(str, Enum):
+    ONLINE = "online"
+    OFFLINE = "offline"
+    MAINTENANCE = "maintenance"
+
+
+class NotificationType(str, Enum):
+    ALERT = "alert"
+    CASE_UPDATE = "case_update"
+    PENALTY = "penalty"
+    APPEAL = "appeal"
+    SYSTEM = "system"
+
+
+class AlertStatus(str, Enum):
+    """Where an invigilator's alert stands in triage (derived, not stored)."""
+
+    NEW = "new"
+    REVIEWED = "reviewed"
+    CONFIRMED = "confirmed"
+    DISMISSED = "dismissed"
+
+
 # Local part of a student email must be exactly six digits (registration number).
 STUDENT_LOCAL_PART_RE = re.compile(r"^\d{6}$")

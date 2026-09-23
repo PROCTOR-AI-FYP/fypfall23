@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -147,6 +148,10 @@ def validate_settings(config: Settings) -> None:
     _validate_cors_origins(config.cors_origins, production=config.is_production)
     if config.session_cookie_samesite == "none" and not config.session_cookie_secure:
         raise InsecureConfigurationError("SESSION_COOKIE_SAMESITE=none requires SESSION_COOKIE_SECURE=true.")
+    try:
+        ZoneInfo(config.institution_timezone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"INSTITUTION_TIMEZONE {config.institution_timezone!r} is not an IANA time zone.") from exc
 
     if not config.is_production:
         return

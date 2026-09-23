@@ -24,7 +24,10 @@ async def main() -> None:
 
     app_password = v["APP_USER_PASSWORD"]
     print("\nResetting app_user password...")
-    await conn.execute(f"ALTER ROLE app_user PASSWORD '{app_password}'")
+    # ALTER ROLE takes no bind parameters; quote the literal server-side
+    # instead of interpolating it into the SQL string.
+    statement = await conn.fetchval("SELECT format('ALTER ROLE app_user PASSWORD %L', $1::text)", app_password)
+    await conn.execute(statement)
     print("[OK] password reset done")
 
     # Also check if app_user can login

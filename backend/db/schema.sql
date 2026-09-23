@@ -1,14 +1,13 @@
--- ProctorAI backend — Phase 2b schema.
--- This is the FIRST schema in this repo; it is written as the full minimal
--- schema this auth spec depends on (users + auth support + just enough of
--- exam_sessions/seat_assignments/cases/audit_log to prove the seat-map
--- linkage and RLS cross-visibility check end to end). Apply with a
+-- ProctorAI backend schema: users (Google sign-in via Supabase Auth),
+-- classrooms, exam sessions and seat maps, detections, cases, penalties,
+-- appeals, notifications, detection thresholds and the append-only audit log.
+--
+-- Idempotent and migrating: every statement is safe to re-run, and changes to
+-- existing tables are ALTERs, so applying it to a database created by an
+-- earlier version upgrades that database in place. Apply with the
 -- superuser/owner connection (DATABASE_ADMIN_URL), e.g.:
 --   psql "$DATABASE_ADMIN_URL" -f db/schema.sql
---
--- Rollback for the whole feature = delete the backend/ directory; nothing
--- outside it is touched. To roll back just this schema in an existing
--- database, `DROP DATABASE proctorai;` (or drop the objects below).
+-- or: python scripts/apply_schema.py
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto; -- gen_random_uuid()
 
@@ -71,7 +70,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_idx ON users (lower(email));
 DROP TABLE IF EXISTS email_verifications;
 
 -- ---------------------------------------------------------------------------
--- exam_sessions (minimal — full scheduling lives outside this spec's scope)
+-- classrooms — exam halls, each with one ceiling camera and an optional seat
+-- polygon map (JSON array of {seat_number, vertices:[{x,y}]} in the camera
+-- frame's pixel space).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS classrooms (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name           TEXT NOT NULL UNIQUE,
+    building       TEXT NOT NULL,
+    capacity       INTEGER NOT NULL CHECK (capacity BETWEEN 1 AND 1000),
+    camera_id      TEXT,
+    camera_status  TEXT NOT NULL DEFAULT 'offline' CHECK (camera_status IN ('online', 'offline', 'maintenance')),
+    seat_map       JSONB,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ---------------------------------------------------------------------------
+-- exam_sessions — one scheduled exam in one room. The Exam Controller
+-- schedules it (status 'scheduled') and assigns an invigilator; the teacher
+-- starts it ('in_progress') and ends it ('completed').
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS exam_sessions (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -84,6 +101,20 @@ CREATE TABLE IF NOT EXISTS exam_sessions (
 
 ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS invigilator_id UUID REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS silent_mode BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS course_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS department TEXT NOT NULL DEFAULT '';
+-- `room` keeps the classroom's name as it was when the exam was scheduled
+-- (it is also the MQTT topic slug and the room printed on notices).
+ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS classroom_id UUID REFERENCES classrooms(id) ON DELETE SET NULL;
+ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS scheduled_date DATE;
+ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS start_time TIME;
+ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS end_time TIME;
+ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+ALTER TABLE exam_sessions ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;
+ALTER TABLE exam_sessions DROP CONSTRAINT IF EXISTS exam_sessions_time_order;
+ALTER TABLE exam_sessions ADD CONSTRAINT exam_sessions_time_order
+    CHECK (start_time IS NULL OR end_time IS NULL OR end_time > start_time);
+CREATE INDEX IF NOT EXISTS exam_sessions_schedule_idx ON exam_sessions (scheduled_date, classroom_id);
 
 -- ---------------------------------------------------------------------------
 -- seat_assignments — the join between a signed-up student and a seat,
@@ -147,8 +178,23 @@ ALTER TABLE detection_events ADD COLUMN IF NOT EXISTS record_image_path TEXT;
 CREATE INDEX IF NOT EXISTS detection_events_clip_purge_idx
     ON detection_events (id) WHERE clip_path IS NOT NULL AND clip_purged_at IS NULL;
 
+-- Each detection carries its own snapshot, so the path identifies it: a
+-- worker retrying a POST after a timeout gets 409 instead of opening a
+-- second case against the same student for the same moment.
+CREATE UNIQUE INDEX IF NOT EXISTS detection_events_snapshot_unique ON detection_events (snapshot_path);
+-- Alert triage by the invigilator: first look at the evidence, and the
+-- "confirm as case" decision that forwards the case to the HOD.
+ALTER TABLE detection_events ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE detection_events ADD COLUMN IF NOT EXISTS teacher_confirmed_at TIMESTAMPTZ;
+ALTER TABLE detection_events ADD COLUMN IF NOT EXISTS teacher_confirmed_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
 ALTER TABLE cases ADD COLUMN IF NOT EXISTS detection_event_id UUID REFERENCES detection_events(id) ON DELETE SET NULL;
 ALTER TABLE cases ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+-- The invigilator's note for the HOD, written when confirming the alert.
+ALTER TABLE cases ADD COLUMN IF NOT EXISTS teacher_note TEXT;
+ALTER TABLE cases ADD COLUMN IF NOT EXISTS teacher_note_by UUID REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS cases_session_idx ON cases (session_id);
+CREATE INDEX IF NOT EXISTS cases_student_idx ON cases (student_id);
 
 -- Not owned by a column, so TRUNCATE ... RESTART IDENTITY leaves it alone and
 -- reference numbers are never reissued.
@@ -172,12 +218,79 @@ CREATE TABLE IF NOT EXISTS penalties (
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Row-Level Security: a student may only ever see rows where they are the
--- accused student. Non-student roles pass through unfiltered (full case
--- management for HOD/Teacher/etc. is out of scope for this spec, but this
--- policy already allows it). The GUCs read here are set per-request by
--- app/db.py::acquire_rls_connection from the JWT — see that file's
--- docstring for the exact mechanism.
+-- Set when an appeal against the case is accepted; the row is kept as record.
+ALTER TABLE penalties ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
+ALTER TABLE penalties ADD COLUMN IF NOT EXISTS revoked_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+-- ---------------------------------------------------------------------------
+-- appeals — a student's appeal against an issued penalty, resolved by the HOD.
+-- At most one OPEN appeal per case, enforced here; the HOD's decision is final
+-- (a second appeal after resolution is refused in the API).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS appeals (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id          UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    student_id       UUID NOT NULL REFERENCES users(id),
+    statement        TEXT NOT NULL CHECK (length(statement) BETWEEN 1 AND 5000),
+    supporting_info  TEXT CHECK (supporting_info IS NULL OR length(supporting_info) <= 1000),
+    status           TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'accepted', 'rejected')),
+    reviewed_by      UUID REFERENCES users(id) ON DELETE SET NULL,
+    review_note      TEXT,
+    submitted_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at      TIMESTAMPTZ,
+    CONSTRAINT appeals_resolution_consistent CHECK ((status = 'open') = (resolved_at IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS appeals_one_open_per_case ON appeals (case_id) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS appeals_case_idx ON appeals (case_id);
+
+-- ---------------------------------------------------------------------------
+-- notifications — per-user inbox behind the header bell.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS notifications (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type            TEXT NOT NULL CHECK (type IN ('alert', 'case_update', 'penalty', 'appeal', 'system')),
+    title           TEXT NOT NULL,
+    message         TEXT NOT NULL,
+    reference_type  TEXT CHECK (reference_type IN ('case', 'appeal', 'session')),
+    reference_id    UUID,
+    read_at         TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS notifications_user_idx ON notifications (user_id, created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- detection_thresholds — Admin-configured sensitivity and composite weight
+-- per behaviour. The detection pipeline reads these (app/services/detection.py):
+-- a signal counts as over threshold at score >= 1 - sensitivity/100.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS detection_thresholds (
+    behaviour_type  TEXT PRIMARY KEY CHECK (behaviour_type IN (
+                        'GAZE_DEVIATION', 'HEAD_POSE_VIOLATION', 'LIP_MOVEMENT',
+                        'PHONE_DETECTED', 'UNAUTHORISED_OBJECT')),
+    sensitivity     INTEGER NOT NULL CHECK (sensitivity BETWEEN 0 AND 100),
+    weight          NUMERIC(4, 3) NOT NULL CHECK (weight BETWEEN 0 AND 1),
+    updated_by      UUID REFERENCES users(id) ON DELETE SET NULL,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Defaults reproduce the pipeline's original fixed thresholds (0.70/0.70/0.75/0.80/0.80).
+-- BEGIN default thresholds (tests re-apply this block between cases)
+INSERT INTO detection_thresholds (behaviour_type, sensitivity, weight) VALUES
+    ('GAZE_DEVIATION', 30, 0.20),
+    ('HEAD_POSE_VIOLATION', 30, 0.20),
+    ('LIP_MOVEMENT', 25, 0.15),
+    ('PHONE_DETECTED', 20, 0.25),
+    ('UNAUTHORISED_OBJECT', 20, 0.20)
+ON CONFLICT (behaviour_type) DO NOTHING;
+-- END default thresholds
+
+-- ---------------------------------------------------------------------------
+-- Row-Level Security. The GUCs are set per request by deps.get_rls_db from
+-- the authenticated user as re-read from the database (see app/db.py).
+--   cases, penalties, appeals: a student sees only their own; staff pass.
+--   notifications: every role sees only its own rows (inserts are open, so
+--   system events can notify anyone).
+-- ---------------------------------------------------------------------------
 ALTER TABLE cases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cases FORCE ROW LEVEL SECURITY;
 
@@ -187,6 +300,43 @@ CREATE POLICY cases_student_isolation ON cases
         current_setting('app.current_role', true) IS DISTINCT FROM 'student'
         OR student_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
     );
+
+ALTER TABLE penalties ENABLE ROW LEVEL SECURITY;
+ALTER TABLE penalties FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS penalties_student_isolation ON penalties;
+CREATE POLICY penalties_student_isolation ON penalties
+    USING (
+        current_setting('app.current_role', true) IS DISTINCT FROM 'student'
+        OR EXISTS (
+            SELECT 1 FROM cases c
+            WHERE c.id = penalties.case_id
+              AND c.student_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+        )
+    );
+
+ALTER TABLE appeals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE appeals FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS appeals_student_isolation ON appeals;
+CREATE POLICY appeals_student_isolation ON appeals
+    USING (
+        current_setting('app.current_role', true) IS DISTINCT FROM 'student'
+        OR student_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    )
+    WITH CHECK (
+        current_setting('app.current_role', true) IS DISTINCT FROM 'student'
+        OR student_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    );
+
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS notifications_owner_read ON notifications;
+CREATE POLICY notifications_owner_read ON notifications FOR SELECT
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+DROP POLICY IF EXISTS notifications_owner_update ON notifications;
+CREATE POLICY notifications_owner_update ON notifications FOR UPDATE
+    USING (user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
+DROP POLICY IF EXISTS notifications_insert ON notifications;
+CREATE POLICY notifications_insert ON notifications FOR INSERT WITH CHECK (true);
 
 -- ---------------------------------------------------------------------------
 -- audit_log
@@ -200,6 +350,11 @@ CREATE TABLE IF NOT EXISTS audit_log (
     ip_address  TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- clock_timestamp(), not now(): now() is the transaction's start time, so
+-- several entries written by one request would share a timestamp and the
+-- case timeline (read from this table) would have no reliable order.
+ALTER TABLE audit_log ALTER COLUMN created_at SET DEFAULT clock_timestamp();
 
 -- Append-only: the app role cannot UPDATE/DELETE (grants below), and this
 -- trigger also blocks the owner. TRUNCATE (used only by the test harness)
@@ -217,30 +372,43 @@ CREATE TRIGGER audit_log_append_only
     FOR EACH ROW EXECUTE FUNCTION audit_log_reject_mutation();
 
 -- ---------------------------------------------------------------------------
--- Grants for the non-superuser application role.
+-- Grants for the non-superuser application role: exactly what the code does.
+-- Records the app never deletes (users are soft-deleted; cases, penalties,
+-- appeals and detections are evidence) get no DELETE.
 -- ---------------------------------------------------------------------------
-GRANT SELECT, INSERT, UPDATE, DELETE ON
-    users, exam_sessions, seat_assignments, cases,
-    detection_events, penalties
+REVOKE ALL ON
+    users, classrooms, exam_sessions, seat_assignments, cases, detection_events,
+    penalties, appeals, notifications, detection_thresholds, audit_log
+    FROM app_user;
+-- An earlier scripts/apply_schema.py set blanket default privileges for
+-- app_user on every future table; undo that so new tables start closed.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM app_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM app_user;
+GRANT USAGE ON SCHEMA public TO app_user;
+GRANT SELECT, INSERT, UPDATE ON
+    users, exam_sessions, cases, detection_events, penalties, appeals, notifications, detection_thresholds
     TO app_user;
-REVOKE UPDATE, DELETE ON audit_log FROM app_user;
+GRANT SELECT, INSERT, UPDATE, DELETE ON classrooms, seat_assignments TO app_user;
 GRANT SELECT, INSERT ON audit_log TO app_user;
 GRANT USAGE ON SEQUENCE case_reference_seq TO app_user;
 
 -- Supabase exposes the public schema through its Data API as the anon and
--- authenticated roles, and grants them access to new tables by default. This
--- backend never uses that API, so strip every grant: otherwise the public
--- anon key could read users.password_hash over REST. (No-op on plain Postgres.)
+-- authenticated roles and grants them access to new tables by default. This
+-- backend never uses that API, and since Google sign-in the anon key ships in
+-- the frontend and real `authenticated` tokens exist; so strip every grant on
+-- every table in the schema, and on tables created later. (No-op on plain
+-- Postgres, where those roles don't exist.)
 DO $$
 DECLARE
   api_role TEXT;
 BEGIN
   FOREACH api_role IN ARRAY ARRAY['anon', 'authenticated'] LOOP
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = api_role) THEN
-      EXECUTE format(
-        'REVOKE ALL ON users, exam_sessions, seat_assignments, '
-        'cases, detection_events, penalties, audit_log FROM %I', api_role);
-      EXECUTE format('REVOKE ALL ON SEQUENCE case_reference_seq FROM %I', api_role);
+      EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %I', api_role);
+      EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM %I', api_role);
+      EXECUTE format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM %I', api_role);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM %I', api_role);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM %I', api_role);
     END IF;
   END LOOP;
 END

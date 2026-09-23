@@ -22,14 +22,19 @@ from app import redis_client as redis_module
 from app.config import settings
 from app.main import app
 from app.models import Role
+from app.services.detection import forget_detection_config
+from app.services.exam_sessions import clear_session_meta_cache
 from tests.helpers import CSRF_HEADERS
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "postgres", "redis"}
 ALLOW_REMOTE_ENV = "PROCTORAI_ALLOW_REMOTE_TEST_DB"
 APP_TABLES = (
-    "audit_log", "penalties", "cases", "detection_events", "seat_assignments", "exam_sessions", "users",
+    "audit_log", "notifications", "appeals", "penalties", "cases", "detection_events", "seat_assignments",
+    "exam_sessions", "classrooms", "detection_thresholds", "users",
 )
+SCHEMA_SQL = (BACKEND_DIR / "db" / "schema.sql").read_text(encoding="utf-8")
+DEFAULT_THRESHOLDS_SQL = SCHEMA_SQL.split("-- BEGIN default thresholds", 1)[1].split("-- END default thresholds", 1)[0]
 
 
 def _refuse_non_local_targets() -> None:
@@ -65,6 +70,7 @@ async def _clean_state() -> AsyncIterator[None]:
     admin_conn = await asyncpg.connect(dsn=settings.database_admin_url)
     try:
         await admin_conn.execute(f"TRUNCATE {', '.join(APP_TABLES)} RESTART IDENTITY CASCADE")
+        await admin_conn.execute(DEFAULT_THRESHOLDS_SQL.split("\n", 1)[1])
         await _apply_sql_file(admin_conn, BACKEND_DIR / "db" / "seed.sql")
         # Seeded students count as having signed in once (seat maps only
         # resolve activated students). Staff stay un-activated so first-sign-in
@@ -78,6 +84,8 @@ async def _clean_state() -> AsyncIterator[None]:
 
     redis_module.init_redis()
     await redis_module.get_redis().flushdb()
+    clear_session_meta_cache()
+    forget_detection_config()
 
     yield
 

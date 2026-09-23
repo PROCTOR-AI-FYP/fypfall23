@@ -16,4 +16,6 @@ email-validator==2.3.0
 python-socketio==5.17.0
 aiomqtt==2.5.1
 anthropic==1.8.0
+# IANA time zones for zoneinfo (INSTITUTION_TIMEZONE); the slim image has no system tzdata.
+tzdata==2025.2
 httpx==0.28.1

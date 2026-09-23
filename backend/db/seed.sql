@@ -21,9 +21,19 @@ VALUES
     ('Usman Tariq', 'controller.exams@students.au.edu.pk', 'exam_controller', 'Examination Branch', 'EMP-1004', 'active')
 ON CONFLICT (email) DO NOTHING;
 
--- A session + one case per seeded student, for the cross-visibility test.
-INSERT INTO exam_sessions (id, course_code, room, status, invigilator_id)
-SELECT '00000000-0000-0000-0000-000000000001', 'CS-4402', 'Hall-A', 'completed', id
+-- Exam halls.
+INSERT INTO classrooms (id, name, building, capacity, camera_id, camera_status)
+VALUES
+    ('00000000-0000-0000-0000-0000000c0001', 'Hall-A', 'Main Academic Block', 60, 'cam-hall-a', 'online'),
+    ('00000000-0000-0000-0000-0000000c0002', 'LH-4', 'Block A', 48, 'cam-lh-4', 'online'),
+    ('00000000-0000-0000-0000-0000000c0003', 'LH-7', 'Block B', 40, 'cam-lh-7', 'maintenance')
+ON CONFLICT (id) DO NOTHING;
+
+-- A completed session + one case per seeded student, for the cross-visibility test.
+INSERT INTO exam_sessions (id, course_code, course_name, department, room, classroom_id, status, invigilator_id,
+                           scheduled_date, start_time, end_time)
+SELECT '00000000-0000-0000-0000-000000000001', 'CS-4402', 'Compiler Construction', 'Computer Science', 'Hall-A',
+       '00000000-0000-0000-0000-0000000c0001', 'completed', id, DATE '2026-09-10', TIME '09:00', TIME '12:00'
 FROM users WHERE email = 'm.bilal@students.au.edu.pk'
 ON CONFLICT (id) DO NOTHING;
 

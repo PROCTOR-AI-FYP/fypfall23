@@ -46,6 +46,11 @@ def session_room(session_id: str) -> str:
     return f"session:{session_id}"
 
 
+def invigilator_room(user_id: str) -> str:
+    """Every alert from any session this teacher invigilates (the Alert Inbox)."""
+    return f"invigilator:{user_id}"
+
+
 def _session_token(environ: dict[str, Any]) -> str | None:
     cookies = SimpleCookie()
     try:
@@ -66,6 +71,8 @@ async def connect(sid: str, environ: dict[str, Any], auth: Any) -> None:
     if user.role == Role.STUDENT:
         raise socketio.exceptions.ConnectionRefusedError("not permitted")
     await sio.save_session(sid, {"user_id": user.user_id, "role": user.role.value})
+    if user.role == Role.TEACHER:
+        await sio.enter_room(sid, invigilator_room(user.user_id))
 
 
 @sio.on(EVENT_JOIN_SESSION)
@@ -90,9 +97,14 @@ async def join_session(sid: str, data: Any) -> dict[str, Any]:
     return {"ok": True}
 
 
-async def emit_detection(session_id: str, payload: dict[str, Any]) -> None:
-    """Best effort: the case is already committed, so a Redis hiccup must not fail the request."""
+async def emit_detection(session_id: str, invigilator_id: str | None, payload: dict[str, Any]) -> None:
+    """Best effort: the case is already committed, so a Redis hiccup must not fail the request.
+
+    Sent to everyone watching the session and to the invigilator's own room;
+    a client in both receives it once.
+    """
+    rooms = [session_room(session_id)] + ([invigilator_room(invigilator_id)] if invigilator_id else [])
     try:
-        await sio.emit(EVENT_ALERT_NEW, payload, room=session_room(session_id))
+        await sio.emit(EVENT_ALERT_NEW, payload, to=rooms)
     except (RedisError, OSError):
         logger.exception("socket.io emit failed for session %s", session_id)

@@ -1,5 +1,8 @@
-"""Apply schema.sql to Supabase via the admin (postgres) connection,
-then create/update app_user with the correct password and update DATABASE_URL.
+"""Apply schema.sql to Supabase via the admin (postgres) connection.
+
+schema.sql owns every grant to app_user (least privilege: no UPDATE/DELETE
+on audit_log, no DELETE on evidence tables). Do not add blanket
+"GRANT ... ON ALL TABLES" here: that silently re-opens the audit log.
 
 Usage:
     python scripts/apply_schema.py
@@ -45,21 +48,13 @@ async def main() -> None:
         # Apply schema
         print("\nApplying db/schema.sql ...")
         await conn.execute(schema_sql)
-        print("[OK] schema.sql applied.")
+        print("[OK] schema.sql applied (including app_user grants).")
 
-        # Grant necessary privileges to app_user on all tables
-        print("\nGranting privileges to app_user...")
-        grant_sql = """
-            GRANT USAGE ON SCHEMA public TO app_user;
-            GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
-            GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;
-            ALTER DEFAULT PRIVILEGES IN SCHEMA public
-                GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
-            ALTER DEFAULT PRIVILEGES IN SCHEMA public
-                GRANT USAGE, SELECT ON SEQUENCES TO app_user;
-        """
-        await conn.execute(grant_sql)
-        print("[OK] Privileges granted.")
+        can_tamper = await conn.fetchval(
+            "SELECT has_table_privilege('app_user', 'audit_log', 'UPDATE')"
+            " OR has_table_privilege('app_user', 'audit_log', 'DELETE')"
+        )
+        print("[FAIL] app_user can modify audit_log" if can_tamper else "[OK] audit_log is append-only for app_user.")
 
         # Verify app_user exists
         exists = await conn.fetchval(

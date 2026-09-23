@@ -15,12 +15,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.audit import ACTION_DETECTION_RECORDED, record_audit
 from app.config import settings
 from app.deps import get_db, require_internal_api_key
-from app.models import BehaviourType
+from app.models import AlertStatus, BehaviourType, NotificationType
 from app.routers.cases import CASE_COLUMNS, row_to_case
 from app.schemas import CaseOut, DetectionEventIn, FrameRequest, FrameResponse, TriggeredSeatOut
-from app.services.detection import SeatSignals, process_frame
+from app.services.detection import SeatSignals, get_detection_config, process_frame
 from app.services.exam_sessions import SessionMeta, get_session_meta
 from app.services.mqtt import alert_topic, mqtt_service
+from app.services.notifications import notify_users
 from app.sockets import emit_detection
 
 router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(require_internal_api_key)])
@@ -58,7 +59,7 @@ async def ingest_frame(body: FrameRequest, conn: asyncpg.Connection = Depends(ge
         )
         for seat in body.seats
     ]
-    triggered = await process_frame(session_id, body.frame_index, seats)
+    triggered = await process_frame(session_id, body.frame_index, seats, await get_detection_config(conn))
     return FrameResponse(
         triggered=[
             TriggeredSeatOut(
@@ -95,26 +96,39 @@ async def record_detection(body: DetectionEventIn, conn: asyncpg.Connection = De
     behaviour_values = [b.value for b in body.behaviour_types]
     per_signal = {signal.value: score for signal, score in body.per_signal.items()}
     async with conn.transaction():
-        detection_id = await conn.fetchval(
+        try:
+            async with conn.transaction():
+                detection_id = await conn.fetchval(
+                    """
+                    INSERT INTO detection_events
+                        (session_id, seat_number, behaviour_types, per_signal, composite_score, snapshot_path, detected_at)
+                    VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+                    RETURNING id
+                    """,
+                    session_id,
+                    body.seat_number,
+                    behaviour_values,
+                    json.dumps(per_signal),
+                    body.composite_score,
+                    body.snapshot_path,
+                    body.detected_at,
+                )
+        except asyncpg.UniqueViolationError as exc:
+            # Same snapshot = same detection: a retried POST, not a new incident.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="This detection (snapshot) has already been recorded."
+            ) from exc
+        student = await conn.fetchrow(
             """
-            INSERT INTO detection_events
-                (session_id, seat_number, behaviour_types, per_signal, composite_score, snapshot_path, detected_at)
-            VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
-            RETURNING id
+            SELECT sa.student_id, u.full_name
+            FROM seat_assignments sa LEFT JOIN users u ON u.id = sa.student_id
+            WHERE sa.session_id = $1 AND sa.seat_number = $2
             """,
             session_id,
             body.seat_number,
-            behaviour_values,
-            json.dumps(per_signal),
-            body.composite_score,
-            body.snapshot_path,
-            body.detected_at,
         )
-        student_id = await conn.fetchval(
-            "SELECT student_id FROM seat_assignments WHERE session_id = $1 AND seat_number = $2",
-            session_id,
-            body.seat_number,
-        )
+        student_id = student["student_id"] if student is not None else None
+        student_name = student["full_name"] if student is not None else None
         sequence = await conn.fetchval("SELECT nextval('case_reference_seq')")
         case_row = await conn.fetchrow(
             f"""
@@ -136,21 +150,34 @@ async def record_detection(body: DetectionEventIn, conn: asyncpg.Connection = De
             new_value={"detection_event_id": str(detection_id), "seat_number": body.seat_number},
             ip_address=None,
         )
+        if meta.invigilator_id:
+            labels = ", ".join(b.value.replace("_", " ").title() for b in body.behaviour_types)
+            await notify_users(
+                conn, [meta.invigilator_id], type_=NotificationType.ALERT,
+                title=f"Alert at seat {body.seat_number}",
+                message=f"{labels} ({meta.course_code}, {meta.room})",
+                reference_type="session", reference_id=session_id,
+            )
 
     case = row_to_case(case_row)
     detected_at = body.detected_at.isoformat()
+    # Same fields as GET /api/detections returns, so the UI handles both alike.
     await emit_detection(
         session_id,
+        meta.invigilator_id,
         {
+            "id": str(detection_id),
             "case_id": case.id,
             "reference_no": case.reference_no,
             "session_id": session_id,
             "seat_number": body.seat_number,
             "student_id": case.student_id,
+            "student_name": student_name,
             "behaviour_types": behaviour_values,
             "per_signal": per_signal,
             "composite_score": body.composite_score,
             "detected_at": detected_at,
+            "status": AlertStatus.NEW.value,
         },
     )
     # Devices get no student identity, only what an in-room indicator needs.

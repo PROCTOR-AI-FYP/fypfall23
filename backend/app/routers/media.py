@@ -190,6 +190,11 @@ async def _media_response(
         new_value={"clip_status": clip_status.value},
         ip_address=get_client_ip(request),
     )
+    if current_user.role == Role.TEACHER:
+        # The invigilator has looked at the evidence: the alert is now "reviewed".
+        await conn.execute(
+            "UPDATE detection_events SET reviewed_at = now() WHERE id = $1 AND reviewed_at IS NULL", row["detection_id"]
+        )
     return CaseMediaOut(
         case_id=str(row["case_id"]) if row["case_id"] is not None else None,
         detection_id=str(row["detection_id"]),

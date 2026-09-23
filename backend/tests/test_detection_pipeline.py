@@ -158,11 +158,11 @@ async def test_frames_rejected_for_inactive_or_unknown_session(
 async def test_detection_creates_linked_case_and_notifies_socket_and_mqtt(
     client: AsyncClient, active_session: str, admin_conn: asyncpg.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    emitted: list[tuple[str, dict[str, Any]]] = []
+    emitted: list[tuple[str, str | None, dict[str, Any]]] = []
     published: list[tuple[str, dict[str, Any]]] = []
 
-    async def fake_emit(session_id: str, payload: dict[str, Any]) -> None:
-        emitted.append((session_id, payload))
+    async def fake_emit(session_id: str, invigilator_id: str | None, payload: dict[str, Any]) -> None:
+        emitted.append((session_id, invigilator_id, payload))
 
     async def fake_publish(topic: str, payload: dict[str, Any]) -> bool:
         published.append((topic, payload))
@@ -187,9 +187,16 @@ async def test_detection_creates_linked_case_and_notifies_socket_and_mqtt(
         "SELECT count(*) FROM audit_log WHERE action = 'detection_recorded' AND target = $1", case["id"]
     ) == 1
 
+    teacher_id = str(await admin_conn.fetchval("SELECT id FROM users WHERE email = $1", TEACHER_EMAIL))
     assert len(emitted) == 1
-    assert emitted[0][0] == active_session
-    assert emitted[0][1]["case_id"] == case["id"]
+    session_id, invigilator_id, payload = emitted[0]
+    assert (session_id, invigilator_id) == (active_session, teacher_id)
+    assert payload["case_id"] == case["id"]
+    assert payload["student_name"] == "Ayesha Raza" and payload["status"] == "new"
+    # The invigilator is notified in the same transaction as the case.
+    assert await admin_conn.fetchval(
+        "SELECT count(*) FROM notifications WHERE user_id = $1::uuid AND type = 'alert'", teacher_id
+    ) == 1
     assert published[0][0] == "proctorai/rooms/hall-b/alerts"
     assert "student_id" not in published[0][1]
     assert published[0][1]["reference_no"] == case["reference_no"]

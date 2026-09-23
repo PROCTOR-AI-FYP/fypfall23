@@ -3,6 +3,7 @@ exactly one Claude API call, and the snapshot purge job.
 """
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -90,7 +91,17 @@ async def test_invalid_transitions_and_roles_are_rejected(client: AsyncClient, a
         assert await _transition(client, token, case_id, "confirmed") == 403
 
 
+def case_record_of(call: dict[str, Any]) -> dict[str, Any]:
+    """The JSON case record inside the <case_record> block of a notice request."""
+    content = call["messages"][0]["content"]
+    return json.loads(content.split("<case_record>\n", 1)[1].split("\n</case_record>", 1)[0])
+
+
 class _FakeMessages:
+    """Stands in for client.beta.messages. Modes: ok (a faithful notice built
+    from the record it was sent), connection_error, refusal, or any fixed text
+    (to simulate a model that was talked into writing something else)."""
+
     def __init__(self, behaviour: str) -> None:
         self.calls: list[dict[str, Any]] = []
         self._behaviour = behaviour
@@ -99,10 +110,21 @@ class _FakeMessages:
         self.calls.append(kwargs)
         if self._behaviour == "connection_error":
             raise anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"))
-        stop_reason = "refusal" if self._behaviour == "refusal" else "end_turn"
+        if self._behaviour == "ok":
+            facts = case_record_of(kwargs)
+            text = (
+                "NOTICE OF ACADEMIC INTEGRITY DECISION\n"
+                f"Reference: {facts['notice_reference']}\n"
+                f"To: {facts['student_name']} (Registration No. {facts['student_reg_no']})\n"
+                f"Course: {facts['course_code']}, {facts['room']}, {facts['exam_date']}\n"
+                f"Penalty: {facts['penalty_type']}. {facts['penalty_description']}\n"
+                "You may appeal through the ProctorAI portal."
+            )
+        else:
+            text = self._behaviour
         return SimpleNamespace(
-            stop_reason=stop_reason,
-            content=[SimpleNamespace(type="text", text="NOTICE OF ACADEMIC INTEGRITY DECISION\nReference: generated")],
+            stop_reason="refusal" if self._behaviour == "refusal" else "end_turn",
+            content=[SimpleNamespace(type="text", text=text)],
             _request_id="req_test",
         )
 
