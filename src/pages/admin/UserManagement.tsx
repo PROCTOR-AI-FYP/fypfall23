@@ -99,8 +99,8 @@ export function UserManagement() {
       }
       setModalOpen(false);
       loadUsers();
-    } catch {
-      setFormErrors({ _: 'Failed to save user' });
+    } catch (err: any) {
+      setFormErrors({ _: err.message || 'Failed to save user' });
     }
     setSaving(false);
   };

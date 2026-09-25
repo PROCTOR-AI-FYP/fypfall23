@@ -71,6 +71,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await close_redis()
 
 
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
 app = FastAPI(
     title="ProctorAI Backend",
     lifespan=lifespan,
@@ -78,6 +84,16 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None if settings.is_production else "/openapi.json",
 )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    print(f"OMG 422: {exc.errors()} body: {exc.body}")
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    print(f"OMG 422: {exc.errors()} body: {exc.body}")
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 def cors_options(origins: list[str]) -> dict[str, Any]:
     # The session is an httpOnly cookie, so credentials must be allowed; that

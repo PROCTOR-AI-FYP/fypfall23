@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -23,8 +23,10 @@ export function Modal({ isOpen, onClose, title, children, footer, size = 'md' }:
   const modalRef = useRef<HTMLDivElement>(null);
 
   // Trap focus
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose();
         return;
@@ -48,31 +50,31 @@ export function Modal({ isOpen, onClose, title, children, footer, size = 'md' }:
           first?.focus();
         }
       }
-    },
-    [onClose]
-  );
+    };
 
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
+  // Initial focus management
   useEffect(() => {
     if (isOpen) {
       previousFocus.current = document.activeElement as HTMLElement;
-      document.addEventListener('keydown', handleKeyDown);
       document.body.style.overflow = 'hidden';
 
-      // Focus first focusable element
       requestAnimationFrame(() => {
-        const focusable = modalRef.current?.querySelector<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-        );
-        focusable?.focus();
+        modalRef.current?.focus();
       });
     }
 
     return () => {
-      document.removeEventListener('keydown', handleKeyDown);
       document.body.style.overflow = '';
-      previousFocus.current?.focus();
+      if (!isOpen) { // Wait, the cleanup runs on unmount or when isOpen changes.
+        // It's safer to just let the previous focus be restored.
+        previousFocus.current?.focus();
+      }
     };
-  }, [isOpen, handleKeyDown]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -93,12 +95,14 @@ export function Modal({ isOpen, onClose, title, children, footer, size = 'md' }:
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
         className={`
           relative w-full ${sizeClasses[size]}
           bg-(--color-bg-surface-overlay) rounded-[8px]
           border border-(--color-border-default)
           shadow-[var(--shadow-overlay)]
           flex flex-col max-h-[85vh]
+          focus:outline-none
         `}
       >
         {/* Header */}
