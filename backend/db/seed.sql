@@ -15,10 +15,10 @@ ON CONFLICT (email) DO NOTHING;
 -- One of each staff role, staff-shaped local parts.
 INSERT INTO users (full_name, email, role, department, registration_or_employee_no, status)
 VALUES
-    ('Dr. M. Bilal', 'm.bilal@students.au.edu.pk', 'teacher', 'Computer Science', 'EMP-1001', 'active'),
-    ('Dr. Sara Khan', 'hod.cs@students.au.edu.pk', 'hod', 'Computer Science', 'EMP-1002', 'active'),
-    ('Admin Registrar', 'admin.registrar@students.au.edu.pk', 'admin', 'IT Services', 'EMP-1003', 'active'),
-    ('Usman Tariq', 'controller.exams@students.au.edu.pk', 'exam_controller', 'Examination Branch', 'EMP-1004', 'active')
+    ('Dr. M. Bilal', 'm.bilal@au.edu.pk', 'teacher', 'Computer Science', 'EMP-1001', 'active'),
+    ('Dr. Sara Khan', 'hod.cs@au.edu.pk', 'hod', 'Computer Science', 'EMP-1002', 'active'),
+    ('Admin Registrar', 'admin.registrar@au.edu.pk', 'admin', 'IT Services', 'EMP-1003', 'active'),
+    ('Usman Tariq', 'controller.exams@au.edu.pk', 'exam_controller', 'Examination Branch', 'EMP-1004', 'active')
 ON CONFLICT (email) DO NOTHING;
 
 -- Exam halls.
@@ -34,7 +34,7 @@ INSERT INTO exam_sessions (id, course_code, course_name, department, room, class
                            scheduled_date, start_time, end_time)
 SELECT '00000000-0000-0000-0000-000000000001', 'CS-4402', 'Compiler Construction', 'Computer Science', 'Hall-A',
        '00000000-0000-0000-0000-0000000c0001', 'completed', id, DATE '2026-09-10', TIME '09:00', TIME '12:00'
-FROM users WHERE email = 'm.bilal@students.au.edu.pk'
+FROM users WHERE email = 'm.bilal@au.edu.pk'
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO seat_assignments (session_id, seat_number, student_reg_no, student_id)

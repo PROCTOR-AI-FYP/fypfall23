@@ -28,7 +28,11 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "production"] = "development"
 
     # --- Core institutional rule ---
-    allowed_email_domain: str = "students.au.edu.pk"
+    # Comma-separated list of institutional email domains. The first is the
+    # student domain; staff may use any of them.
+    allowed_email_domain: str = "students.au.edu.pk,au.edu.pk"
+    # The domain that auto-provisions student accounts (6-digit local part).
+    student_email_domain: str = "students.au.edu.pk"
 
     # --- Database (Supabase Postgres in production) ---
     database_url: str = "postgresql://app_user:app_password@localhost:5432/proctorai"
@@ -118,6 +122,10 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip().rstrip("/") for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
+    @property
+    def allowed_email_domains(self) -> list[str]:
+        return [d.strip().lower() for d in self.allowed_email_domain.split(",") if d.strip()]
 
     @property
     def is_production(self) -> bool:

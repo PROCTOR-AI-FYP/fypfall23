@@ -32,6 +32,7 @@ from app.security import (
     clear_session_cookie,
     create_access_token,
     is_allowed_domain,
+    is_student_domain,
     is_student_shaped_local_part,
     local_part_of,
     normalize_email,
@@ -54,7 +55,10 @@ ERR_IDENTITY_CONFLICT = (
 
 
 def _wrong_domain_message() -> str:
-    return f"Sign in with your @{settings.allowed_email_domain} Google account."
+    domains = settings.allowed_email_domains
+    if len(domains) == 1:
+        return f"Sign in with your @{domains[0]} Google account."
+    return f"Sign in with your institutional Google account ({', '.join('@' + d for d in domains)})."
 
 
 class _Rejected(Exception):
@@ -92,7 +96,9 @@ async def _resolve_account(conn: asyncpg.Connection, *, email: str, sub: str, fu
     )
 
     if row is None:
-        if not is_student_shaped_local_part(local_part_of(email)):
+        # Only auto-provision students: must be on the student domain AND
+        # have a six-digit (registration number) local part.
+        if not is_student_domain(email) or not is_student_shaped_local_part(local_part_of(email)):
             raise _Rejected(status.HTTP_403_FORBIDDEN, ERR_STAFF_NOT_PROVISIONED, "staff_not_provisioned")
         return await _provision_student(conn, email=email, sub=sub, full_name=full_name), "student_provisioned"
 

@@ -351,6 +351,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_log FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS audit_log_insert ON audit_log;
+CREATE POLICY audit_log_insert ON audit_log FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS audit_log_select ON audit_log;
+CREATE POLICY audit_log_select ON audit_log FOR SELECT USING (true);
+
 -- clock_timestamp(), not now(): now() is the transaction's start time, so
 -- several entries written by one request would share a timestamp and the
 -- case timeline (read from this table) would have no reliable order.

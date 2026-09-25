@@ -97,6 +97,7 @@ def _verify_sync(token: str) -> dict[str, Any]:
         audience=settings.supabase_jwt_audience,
         issuer=settings.supabase_issuer,
         options={"require": REQUIRED_CLAIMS, "verify_signature": True},
+        leeway=60,
     )
 
 

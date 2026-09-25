@@ -35,7 +35,13 @@ def email_domain_of(email: str) -> str:
 
 
 def is_allowed_domain(email: str) -> bool:
-    return email_domain_of(email).lower() == settings.allowed_email_domain.lower()
+    domain = email_domain_of(email).lower()
+    return domain in settings.allowed_email_domains
+
+
+def is_student_domain(email: str) -> bool:
+    """True if the email is on the student-specific domain."""
+    return email_domain_of(email).lower() == settings.student_email_domain.lower()
 
 
 def is_student_shaped_local_part(local_part: str) -> bool:

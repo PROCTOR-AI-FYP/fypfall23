@@ -11,8 +11,9 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-export const ALLOWED_EMAIL_DOMAIN =
-  (import.meta.env.VITE_ALLOWED_EMAIL_DOMAIN as string | undefined) || 'students.au.edu.pk';
+// The backend enforces allowed email domains (ALLOWED_EMAIL_DOMAIN in
+// backend/.env). The frontend no longer sends an `hd` hint to Google because
+// Google's hd parameter doesn't support multiple domains / subdomains.
 
 let client: SupabaseClient | null = null;
 
@@ -44,7 +45,7 @@ export async function startGoogleSignIn(): Promise<void> {
       redirectTo: `${window.location.origin}/login`,
       // UX hint only: Google pre-filters to the university domain. The backend
       // enforces the domain on the verified email regardless.
-      queryParams: { hd: ALLOWED_EMAIL_DOMAIN, prompt: 'select_account' },
+      queryParams: { prompt: 'select_account' },
     },
   });
   if (error) throw { message: error.message, code: 'OAUTH_START', status: 0 };
