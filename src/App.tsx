@@ -7,6 +7,7 @@ import { Role } from './lib/types';
 import { AppShell } from './components/layout/AppShell';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { LoginPage } from './pages/Login';
+import { LandingPage } from './pages/Landing';
 
 // Admin
 import { AdminDashboard } from './pages/admin/Dashboard';
@@ -45,6 +46,7 @@ export default function App() {
       <AuthProvider>
         <BrowserRouter>
           <Routes>
+            <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={<LoginPage />} />
 
             <Route element={<AppShell />}>
@@ -85,7 +87,7 @@ export default function App() {
               <Route path="/exam-controller/reports" element={<ProtectedRoute allowedRoles={[Role.ExamController]}><StatisticalReports /></ProtectedRoute>} />
             </Route>
 
-            <Route path="*" element={<Navigate to="/login" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>

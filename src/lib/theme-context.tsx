@@ -22,10 +22,36 @@ function resolveTheme(theme: Theme): 'light' | 'dark' {
   return theme;
 }
 
-function applyTheme(resolved: 'light' | 'dark') {
+function applyTheme(resolved: 'light' | 'dark', animate = false) {
+  if (typeof document === 'undefined') return;
   const root = document.documentElement;
-  root.classList.toggle('dark', resolved === 'dark');
-  root.setAttribute('data-theme', resolved);
+
+  const update = () => {
+    root.classList.toggle('dark', resolved === 'dark');
+    root.setAttribute('data-theme', resolved);
+  };
+
+  if (!animate) {
+    update();
+    return;
+  }
+
+  // Add smooth CSS transition class across elements
+  root.classList.add('theme-transitioning');
+
+  // If View Transitions API is supported, use it for cross-fade
+  if ('startViewTransition' in document) {
+    (document as unknown as { startViewTransition: (cb: () => void) => void }).startViewTransition(() => {
+      update();
+    });
+  } else {
+    update();
+  }
+
+  // Clean up transition class after transition finishes
+  setTimeout(() => {
+    root.classList.remove('theme-transitioning');
+  }, 450);
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -41,7 +67,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEY, newTheme);
     const resolved = resolveTheme(newTheme);
     setResolvedTheme(resolved);
-    applyTheme(resolved);
+    applyTheme(resolved, true);
   }, []);
 
   // Listen for system theme changes
@@ -51,16 +77,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       if (theme === 'system') {
         const resolved = getSystemTheme();
         setResolvedTheme(resolved);
-        applyTheme(resolved);
+        applyTheme(resolved, true);
       }
     };
     mediaQuery.addEventListener('change', handler);
     return () => mediaQuery.removeEventListener('change', handler);
   }, [theme]);
 
-  // Apply on mount
+  // Apply on mount without animation to prevent initial flash
   useEffect(() => {
-    applyTheme(resolvedTheme);
+    applyTheme(resolvedTheme, false);
   }, [resolvedTheme]);
 
   return (

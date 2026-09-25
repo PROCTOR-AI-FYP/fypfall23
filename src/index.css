@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ═══════════════════════════════════════════
    ProctorAI Design Token System
    Light & Dark themes designed together.
@@ -145,20 +147,126 @@
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
-/* ── Base styles ───────────────────────── */
-
 html {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ── Landing Page Full-Section Layout & Snap Scrolling ── */
+html.has-scroll-snap {
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
+  overflow-y: scroll;
+}
+
+.snap-section,
+.landing-section {
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  min-height: 100vh;
+  height: 100vh;
+  position: relative;
+  overflow: hidden;
+}
+
+@media (max-width: 768px) {
+  .snap-section,
+  .landing-section {
+    height: auto;
+    min-height: 100vh;
+    scroll-snap-align: none;
+  }
+  html.has-scroll-snap {
+    scroll-snap-type: none;
+  }
+}
+
+/* ── About Us Transition Gradient (Hero fading seamlessly into About Us blue) ── */
+.about-section-gradient {
+  background:
+    radial-gradient(ellipse 100% 60% at 50% 0%, rgba(96, 165, 250, 0.16), transparent 75%),
+    linear-gradient(
+      180deg,
+      #1E4A8A 0%,
+      #163C70 48%,
+      #10284C 84%,
+      #0A1B33 100%
+    );
+}
+
+.dark .about-section-gradient {
+  background:
+    radial-gradient(ellipse 100% 60% at 50% 0%, rgba(96, 165, 250, 0.10), transparent 75%),
+    linear-gradient(
+      180deg,
+      #152A47 0%,
+      #0F1E33 50%,
+      #0A1320 84%,
+      #050A10 100%
+    );
+}
+
 body {
   background-color: var(--color-bg-primary);
   color: var(--color-text-primary);
-  transition: background-color var(--transition-base), color var(--transition-base);
+  transition: background-color 300ms cubic-bezier(0.4, 0, 0.2, 1), color 300ms cubic-bezier(0.4, 0, 0.2, 1);
   margin: 0;
   min-height: 100vh;
+}
+
+/* ── Smooth Theme Transition Animations ── */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 350ms;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+::view-transition-old(root) {
+  animation: 350ms cubic-bezier(0.4, 0, 0.2, 1) both theme-fade-out;
+}
+
+::view-transition-new(root) {
+  animation: 350ms cubic-bezier(0.4, 0, 0.2, 1) both theme-fade-in;
+}
+
+@keyframes theme-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes theme-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Fallback for browsers without View Transitions */
+.theme-transitioning,
+.theme-transitioning *,
+.theme-transitioning *::before,
+.theme-transitioning *::after {
+  transition: background-color 350ms cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 350ms cubic-bezier(0.4, 0, 0.2, 1),
+              color 350ms cubic-bezier(0.4, 0, 0.2, 1),
+              fill 350ms cubic-bezier(0.4, 0, 0.2, 1),
+              stroke 350ms cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 350ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+/* ── Parallax Layer Optimizations ── */
+.parallax-hero-content,
+.parallax-hero-bg,
+.parallax-hero-pillars,
+.parallax-about-bg,
+.parallax-about-orb,
+.parallax-about-image,
+.parallax-about-text,
+.parallax-login-heading,
+.parallax-login-frame {
+  will-change: transform, opacity;
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 
 /* ── Focus styles ──────────────────────── */
@@ -168,16 +276,13 @@ body {
   outline-offset: 2px;
 }
 
-/* ── Reduced motion ────────────────────── */
+/* ── Reduced motion overrides (focused, non-destructive) ── */
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
+  .animate-spin,
+  .animate-pulse,
+  .animate-bounce {
+    animation: none !important;
   }
 }
 

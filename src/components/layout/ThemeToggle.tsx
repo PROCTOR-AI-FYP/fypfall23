@@ -12,7 +12,7 @@ export function ThemeToggle() {
 
   return (
     <div
-      className="flex items-center bg-(--color-bg-surface-raised) rounded-[6px] p-0.5 border border-(--color-border-default)"
+      className="flex items-center gap-1.5"
       role="radiogroup"
       aria-label="Theme selection"
     >
@@ -24,10 +24,10 @@ export function ThemeToggle() {
           aria-label={opt.label}
           onClick={() => setTheme(opt.value)}
           className={`
-            p-1.5 rounded-[4px] transition-colors cursor-pointer
+            p-2 rounded-[8px] transition-all cursor-pointer border
             ${theme === opt.value
-              ? 'bg-(--color-bg-surface) text-(--color-text-primary) shadow-[var(--shadow-surface)]'
-              : 'text-(--color-text-muted) hover:text-(--color-text-secondary)'
+              ? 'bg-(--color-bg-surface) text-(--color-text-primary) border-(--color-border-default) shadow-[var(--shadow-surface)] scale-105'
+              : 'bg-(--color-bg-surface-raised) text-(--color-text-muted) border-transparent hover:text-(--color-text-secondary) hover:bg-(--color-bg-surface-overlay)'
             }
           `}
           title={opt.label}

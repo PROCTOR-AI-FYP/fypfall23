@@ -7,8 +7,8 @@ import {
   Calendar, UserCheck, History, TrendingUp,
   FolderOpen, FileQuestion,
   PanelLeftClose, PanelLeftOpen,
-  Hexagon,
 } from 'lucide-react';
+import { Logo } from '@/components/ui/Logo';
 import type { ReactNode } from 'react';
 
 interface NavItem {
@@ -69,9 +69,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     >
       {/* Logo */}
       <div className="h-14 flex items-center px-4 border-b border-(--color-border-default) gap-3 shrink-0">
-        <div className="w-8 h-8 rounded-[6px] bg-(--color-accent-primary) flex items-center justify-center text-white shrink-0">
-          <Hexagon size={18} />
-        </div>
+        <Logo size={28} />
         {!collapsed && (
           <span className="font-[Sora] font-bold text-[16px] text-(--color-text-primary) whitespace-nowrap">
             ProctorAI
