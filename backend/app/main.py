@@ -90,11 +90,6 @@ async def validation_exception_handler(request, exc):
     print(f"OMG 422: {exc.errors()} body: {exc.body}")
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request, exc):
-    print(f"OMG 422: {exc.errors()} body: {exc.body}")
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
-
 def cors_options(origins: list[str]) -> dict[str, Any]:
     # The session is an httpOnly cookie, so credentials must be allowed; that
     # is only safe because origins are an exact allowlist (wildcards are
@@ -103,7 +98,7 @@ def cors_options(origins: list[str]) -> dict[str, Any]:
         "allow_origins": origins,
         "allow_credentials": True,
         "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE"],
-        "allow_headers": ["Content-Type", CSRF_HEADER],
+        "allow_headers": ["Content-Type", "Accept", CSRF_HEADER],
         "max_age": 600,
     }
 
