@@ -88,6 +88,18 @@ class MediaPipePoseSource:
             min_tracking_confidence=.6, output_facial_transformation_matrixes=True)
         self.landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
         self._last_ms = -1
+        self._mirrored = False
+
+    def _detect(self, small, timestamp, mirrored):
+        # A failed view may be easier for the model after horizontal reflection.
+        # Reuse VIDEO tracking in the successful view instead of doubling every
+        # frame's inference. The camera feed itself always stays unmirrored.
+        view = cv2.flip(small, 1) if mirrored else small
+        image = self.mp.Image(image_format=self.mp.ImageFormat.SRGB,
+                              data=cv2.cvtColor(view,cv2.COLOR_BGR2RGB))
+        ms = max(self._last_ms+1,round(timestamp*1000))
+        self._last_ms = ms
+        return self.landmarker.detect_for_video(image,ms)
 
     def estimate(self, frame, timestamp):
         if frame is None or frame.ndim != 3 or frame.shape[2] != 3 or not frame.size:
@@ -95,14 +107,17 @@ class MediaPipePoseSource:
         h,w = frame.shape[:2]
         ratio = min(1.,640/max(h,w))
         small = cv2.resize(frame,(round(w*ratio),round(h*ratio))) if ratio < 1 else frame
-        image = self.mp.Image(image_format=self.mp.ImageFormat.SRGB,
-                              data=cv2.cvtColor(small,cv2.COLOR_BGR2RGB))
-        ms = max(self._last_ms+1,round(timestamp*1000))
-        self._last_ms = ms
-        result = self.landmarker.detect_for_video(image,ms)
+        result = self._detect(small,timestamp,self._mirrored)
+        if not result.face_landmarks:
+            recovered = self._detect(small,timestamp,not self._mirrored)
+            if recovered.face_landmarks:
+                self._mirrored = not self._mirrored
+                result = recovered
         if len(result.face_landmarks) != 1:
             return FaceObservation(None,reason='no_face' if not result.face_landmarks else 'multiple_faces')
         points = np.array([(p.x,p.y) for p in result.face_landmarks[0][:468]])
+        if self._mirrored:
+            points[:,0] = 1.-points[:,0]
         if not np.isfinite(points).all():
             return FaceObservation(None,reason='unreliable_face')
         x1,y1 = points.min(axis=0)
@@ -113,6 +128,12 @@ class MediaPipePoseSource:
             return FaceObservation(None,reason='unreliable_face')
         try:
             rotation = rotation_from_matrix(result.facial_transformation_matrixes[0])
+            if self._mirrored:
+                # Reflect both camera and canonical model axes to retain a
+                # proper rotation. Yaw/roll signs and original-image boxes must
+                # not inherit the mirrored inference view.
+                reflection = np.diag([-1.,1.,1.])
+                rotation = reflection @ rotation @ reflection
         except ValueError:
             return FaceObservation(None,reason='unreliable_face')
         return FaceObservation(rotation,(x1*w,y1*h,x2*w,y2*h))
@@ -124,18 +145,24 @@ class MediaPipePoseSource:
 class HeadPoseDetector:
     def __init__(self, yaw_threshold=YAW_THRESHOLD_DEG, pitch_threshold=PITCH_THRESHOLD_DEG,
                  sustained_seconds=SUSTAINED_SECONDS, debug=False, *, source=None,
-                 calibration_seconds=2., smoothing_seconds=.12, max_gap=.5):
+                 calibration_seconds=2., smoothing_seconds=.12, max_gap=.5,
+                 reference_loss_seconds=2.):
         if not 0<yaw_threshold<85 or not -85<pitch_threshold<0 or sustained_seconds<=0:
             raise ValueError('Invalid head-pose thresholds')
-        if calibration_seconds<=0 or smoothing_seconds<0 or max_gap<=0:
+        if (not all(math.isfinite(value) for value in
+                    (calibration_seconds,smoothing_seconds,max_gap,reference_loss_seconds))
+                or calibration_seconds<=0 or smoothing_seconds<0 or max_gap<=0
+                or reference_loss_seconds<max_gap):
             raise ValueError('Invalid head-pose timing')
         self.yaw_threshold, self.pitch_threshold = yaw_threshold,pitch_threshold
         self.sustained_seconds, self.debug = sustained_seconds,debug
         self.calibration_seconds, self.smoothing_seconds, self.max_gap = calibration_seconds,smoothing_seconds,max_gap
+        self.reference_loss_seconds = reference_loss_seconds
         self.source = source if source is not None else MediaPipePoseSource()
         self._neutral = self._filtered = None
         self._last_pose = self._raw_pose = None
         self._last_time = self._violation_start_time = None
+        self._last_valid_time = None
         self._calibration = None
         self._calibration_start = None
         self._shape = self._box = None
@@ -151,6 +178,11 @@ class HeadPoseDetector:
         self._calibration_progress = 0.
         self._clear_violation()
         self._reason = 'calibrating'
+
+    def _invalidate_reference(self):
+        self._neutral = self._filtered = self._last_pose = None
+        self._clear_violation()
+        self._interrupt_calibration()
 
     def _clear_violation(self):
         self._violation_start_time = None
@@ -178,12 +210,17 @@ class HeadPoseDetector:
             self._clear_violation()
             self._interrupt_calibration()
             self._filtered = None
+        if dt is not None and (dt<=0 or dt>=self.reference_loss_seconds):
+            self._invalidate_reference()
         self._last_time = now
         if self._shape is not None and frame.shape!=self._shape:
             self._neutral = self._filtered = None
             self._clear_violation()
             self._interrupt_calibration()
         self._shape = frame.shape
+        if (self._last_valid_time is not None
+                and now-self._last_valid_time>=self.reference_loss_seconds):
+            self._invalidate_reference()
         observation = self.source.estimate(frame,now)
         self._box = observation.box
         try:
@@ -196,7 +233,12 @@ class HeadPoseDetector:
             self._last_pose = self._raw_pose = self._filtered = None
             self._clear_violation()
             self._interrupt_calibration()
+            if observation.reason == 'multiple_faces':
+                # A face-list position is not a student identity. Do not apply
+                # one person's neutral posture after an ambiguous handover.
+                self._invalidate_reference()
             return None
+        self._last_valid_time = now
         if self._calibration is not None:
             raw = self._raw_pose
             if abs(raw.yaw)>35 or abs(raw.pitch)>55 or abs(raw.roll)>35:

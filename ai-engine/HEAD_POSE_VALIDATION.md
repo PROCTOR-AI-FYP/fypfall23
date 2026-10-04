@@ -12,8 +12,9 @@ MediaPipe's right-handed space with camera looking along negative Z:
 `R = Rz(roll) Ry(yaw) Rx(-pitch)`
 
 Yaw is positive towards the right of an **unmirrored input image**, pitch is
-negative down, and roll is positive counterclockwise in that image. Display
-mirroring must not be applied before inference. Pitch is not yaw, and roll is
+negative down, and roll is positive counterclockwise in that image. The camera
+feed remains unmirrored. An internal mirrored recovery pass converts both its
+rotation and landmark coordinates back to the original camera view. Pitch is not yaw, and roll is
 not the sideways-turn alert angle. Translation and uniform scale cannot
 become head angles.
 
@@ -30,6 +31,10 @@ orientation is relative to it (`Rneutral.T @ Rcurrent`), rather than subtracting
 Euler numbers. This compensates for normal camera/posture offset. Recalibrate
 after moving the camera, changing the monitored person or changing the exam
 working posture. A camera resolution change invalidates the baseline.
+Two seconds without a valid face, a capture gap of two seconds or more, clock
+reversal, or any multiple-face observation also invalidates it. Brief tracking
+loss clears the warning but preserves the reference. Set neutral again after
+longer loss; face-list positions are never treated as student identities.
 
 Matrix smoothing has a 120 ms time constant. Yaw beyond ±30° or downward pitch
 below -20° must remain continuously outside the limits for two seconds. A 3°
@@ -94,6 +99,31 @@ the recovery fixes and reset the calibration; set neutral again before use.
 The combined AI and local web regression suite passed **102 tests**. The
 production frontend build also passed. Tests use disposable storage; they do
 not run the platform test suite that clears the configured database.
+
+The 2026-10-05 notebook comparison and recovery update passed **115 AI and web
+regression tests**, including 47 head-pose tests. Recorded-only replay recovered
+the saved sideways face, preserved angle directions, cleared unavailable
+angles, invalidated an expired reference and successfully recalibrated. The
+saved right/down frames remained undetected at the existing confidence limits.
+These annotated stills do not establish physical angle accuracy. See
+[the notebook review](HEAD_POSE_NOTEBOOK_REVIEW.md) for the comparison and limits.
+
+The user then authorized a quick physical webcam check on 2026-10-05. It used
+the same `HeadPoseDetector` as the website in an on-screen guided preview;
+it did not create exam cases or exercise role APIs. The camera delivered
+1280×720, preview averaged 17.4 FPS and typical head inference took 13.4 ms.
+Calibration completed, neutral posture produced no sustained warning, both
+sideways directions were tracked with correct signs, and returning forward
+cleared the warning. Positive yaw reached +30.7° and produced 21 sustained
+samples; negative yaw reached −33.0° and produced 27. Counts group actual
+observed directions across prompt boundaries, since movement lagged the cues.
+No missing or ambiguous faces were reported during this check.
+
+Downward pitch reached approximately −18.0°, without crossing the −20° entry
+threshold. The downward warning therefore remains unconfirmed. Camera access
+was released after the 29-second guide. Only angle/status measurements were
+saved in Git-excluded `.runtime/headpose-notebook-review/quick-webcam-20261005-010354.json`;
+no webcam images were saved.
 
 ## Deployment limits
 

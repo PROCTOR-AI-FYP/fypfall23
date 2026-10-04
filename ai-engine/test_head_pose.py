@@ -1,10 +1,11 @@
 """Known 3D rotations, neutral calibration and timed head-pose regressions."""
 import math
+from types import SimpleNamespace
 import cv2
 import numpy as np
 import pytest
 
-from head_pose_detector import (HEAD,FaceObservation,HeadPoseDetector,PoseResult,
+from head_pose_detector import (HEAD,FaceObservation,HeadPoseDetector,MediaPipePoseSource,PoseResult,
                                 pose_from_rotation,rotation_from_matrix)
 
 
@@ -200,3 +201,112 @@ def test_extreme_relative_rotation_does_not_disable_detector(detector):
     source.observation=FaceObservation(baseline)
     assert head.process_frame(frame,now+.1) is None
     assert head.status()['state']=='neutral'
+
+
+def test_brief_tracking_loss_keeps_reference_but_restarts_warning(detector):
+    head,source,frame=detector
+    now=calibrate(head,frame)
+    source.observation=FaceObservation(rotation(40))
+    head.process_frame(frame,now)
+    source.observation=FaceObservation(None,reason='no_face')
+    head.process_frame(frame,now+.1)
+    assert head.status()['calibrated'] and head.status()['yaw'] is None
+    source.observation=FaceObservation(rotation(40))
+    head.process_frame(frame,now+.2)
+    assert head.status()['duration']==0 and head.status()['yaw']==pytest.approx(40)
+
+
+@pytest.mark.parametrize('reason',['no_face','multiple_faces'])
+def test_lost_or_ambiguous_student_requires_fresh_neutral(detector,reason):
+    head,source,frame=detector
+    now=calibrate(head,frame)
+    source.observation=FaceObservation(None,reason=reason)
+    for t in np.arange(now,now+2.11,.1): head.process_frame(frame,float(t))
+    assert not head.status()['calibrated'] and not head.status()['sustained']
+    source.observation=FaceObservation(rotation(40))
+    assert head.process_frame(frame,now+2.2) is None
+    assert head.status()['state']=='calibration_required'
+    source.observation=FaceObservation(rotation())
+    calibrate(head,frame,now+2.3)
+    assert head.status()['state']=='neutral'
+
+
+def test_multiple_faces_invalidate_reference_immediately(detector):
+    head,source,frame=detector
+    now=calibrate(head,frame)
+    source.observation=FaceObservation(None,reason='multiple_faces')
+    head.process_frame(frame,now)
+    assert not head.status()['calibrated']
+    source.observation=FaceObservation(rotation(-40))
+    head.process_frame(frame,now+.1)
+    assert head.status()['state']=='calibration_required' and head.status()['yaw'] is None
+
+
+@pytest.mark.parametrize('offset',[-.1,2.])
+def test_clock_reset_or_long_capture_gap_invalidates_reference(detector,offset):
+    head,source,frame=detector
+    now=calibrate(head,frame)
+    source.observation=FaceObservation(rotation(40))
+    head.process_frame(frame,now)
+    assert head.process_frame(frame,now+offset) is None
+    assert not head.status()['calibrated'] and head.status()['yaw'] is None
+
+
+def face_result(angles=(0,0,0),count=1):
+    points=[SimpleNamespace(x=x,y=y) for x,y in [(0.2,0.2),(0.4,0.5)]*234]
+    return SimpleNamespace(face_landmarks=[points]*count,
+                           facial_transformation_matrixes=[rotation(*angles)]*count)
+
+
+def queued_pose_source(results):
+    class Landmarker:
+        def __init__(self): self.calls=[]
+        def detect_for_video(self,image,timestamp):
+            self.calls.append((image.data.copy(),timestamp))
+            return results.pop(0)
+    source=MediaPipePoseSource.__new__(MediaPipePoseSource)
+    source.mp=SimpleNamespace(Image=lambda **kwargs: SimpleNamespace(**kwargs),
+                              ImageFormat=SimpleNamespace(SRGB=1))
+    source.landmarker=Landmarker()
+    source._last_ms=-1
+    source._mirrored=False
+    return source
+
+
+@pytest.mark.parametrize('angles',[(40,-25,15),(-40,20,-15),(0,-30,0)])
+def test_mirror_recovery_preserves_physical_axes_box_and_frame(angles):
+    # Mirrored landmark coordinates and rotation describe the reflected image.
+    # Their public result must describe the original, unmodified camera image.
+    mirrored=(-angles[0],angles[1],-angles[2])
+    source=queued_pose_source([face_result(count=0),face_result(mirrored),face_result(mirrored)])
+    frame=np.zeros((480,640,3),np.uint8)
+    frame[:,:100,0]=120
+    original=frame.copy()
+    found=source.estimate(frame,1.)
+    assert np.array_equal(frame,original)
+    pose=pose_from_rotation(found.rotation)
+    assert (pose.yaw,pose.pitch,pose.roll)==pytest.approx(angles)
+    assert found.box==pytest.approx((384,96,512,240))
+    calls=source.landmarker.calls
+    assert np.array_equal(calls[0][0],cv2.cvtColor(frame,cv2.COLOR_BGR2RGB))
+    assert np.array_equal(calls[1][0],cv2.cvtColor(cv2.flip(frame,1),cv2.COLOR_BGR2RGB))
+    source.estimate(frame,1.)
+    assert len(calls)==3  # Successful reflected view becomes the tracked primary.
+    assert [entry[1] for entry in calls]==[1000,1001,1002]
+
+
+@pytest.mark.parametrize('counts',[(2,),(0,2),(0,0)])
+def test_recovery_cannot_select_a_student_from_ambiguous_faces(counts):
+    source=queued_pose_source([face_result(count=count) for count in counts])
+    result=source.estimate(np.zeros((480,640,3),np.uint8),1.)
+    assert result.rotation is None and result.box is None
+    assert result.reason==('no_face' if counts==(0,0) else 'multiple_faces')
+    assert len(source.landmarker.calls)==len(counts)
+
+
+def test_recovery_rejects_invalid_face_transform():
+    bad=face_result()
+    bad.facial_transformation_matrixes=[np.diag([-1.,1.,1.])]
+    source=queued_pose_source([face_result(count=0),bad])
+    result=source.estimate(np.zeros((480,640,3),np.uint8),1.)
+    assert result.reason=='unreliable_face' and result.rotation is None
