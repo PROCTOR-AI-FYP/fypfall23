@@ -28,6 +28,10 @@ __pycache__/
 *.sqlite
 *.sqlite3
 
+# Original panel deck contains uncropped private webcam images.
+# The privacy-updated presentation is safe to version with the project.
+/deliverables/ProctorAI_University_Panel.pptx
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

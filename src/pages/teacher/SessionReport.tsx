@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Clock, Users, ShieldAlert, FileCheck } from 'lucide-react';
@@ -10,6 +11,7 @@ import type { ExamSession, Case } from '@/lib/types';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 
 export function SessionReport() {
+  const liveRevision = useLiveRevision();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [session, setSession] = useState<ExamSession | null>(null);
@@ -20,13 +22,13 @@ export function SessionReport() {
     if (!id) return;
     Promise.all([
       api.getSession(id),
-      api.getCases() // In reality, filter by sessionId
+      api.getCases({sessionId:id})
     ]).then(([sessRes, caseRes]) => {
       setSession(sessRes.data);
       setCases(caseRes.data.filter(c => c.sessionId === id));
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, [id]);
+  }, [id, liveRevision]);
 
   if (loading) return <LoadingState />;
   if (!session) return <div className="text-center py-16 text-(--color-text-muted)">Session not found</div>;

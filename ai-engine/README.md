@@ -11,6 +11,11 @@ them weights 0.75 and 0.90 respectively. Other objects are outside this policy.
 
 ## Run from the project root (PowerShell)
 
+Head pose is now calibrated against the student's normal exam posture and
+uses MediaPipe's face rotation with corrected yaw/pitch/roll axes. The website
+includes live angles, a neutral-pose calibration button and sustained-motion
+warnings. See [head-pose validation and limits](HEAD_POSE_VALIDATION.md).
+
 The existing `venv` has the tested dependencies and downloaded model.
 
 ```powershell

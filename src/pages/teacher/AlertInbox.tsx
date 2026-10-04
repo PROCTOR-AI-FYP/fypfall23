@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useLiveRevision } from '@/lib/live-context';
+import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { DataTable, type Column } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
@@ -10,6 +12,10 @@ import * as api from '@/lib/api';
 import type { DetectionEvent } from '@/lib/types';
 
 export function AlertInbox() {
+  const liveRevision = useLiveRevision();
+  const [searchParams] = useSearchParams();
+  const requestedAlert = searchParams.get('alert');
+  const openedAlert = useRef<string | null>(null);
   const [alerts, setAlerts] = useState<DetectionEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -18,7 +24,7 @@ export function AlertInbox() {
   const [saving, setSaving] = useState(false);
 
   const load = () => {
-    setLoading(true);
+    if (!liveRevision) setLoading(true);
     setError('');
     // Every alert from the sessions this teacher invigilates.
     api.getDetectionEvents().then(r => {
@@ -27,7 +33,16 @@ export function AlertInbox() {
     }).catch(e => { setError(e.message); setLoading(false); });
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [liveRevision]);
+
+  useEffect(() => {
+    if (!requestedAlert || requestedAlert === openedAlert.current) return;
+    const alert = alerts.find(value => value.id === requestedAlert);
+    if (alert) {
+      openedAlert.current = requestedAlert;
+      setSelectedAlert(alert);
+    }
+  }, [alerts, requestedAlert]);
 
   // New alerts arrive live (Socket.IO alert:new), no refresh needed.
   useEffect(() => api.subscribeToAlerts(event => {

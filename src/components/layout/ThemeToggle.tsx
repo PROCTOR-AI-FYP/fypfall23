@@ -12,7 +12,7 @@ export function ThemeToggle() {
 
   return (
     <div
-      className="flex items-center gap-1.5"
+      className="pa-theme-toggle flex items-center gap-1.5"
       role="radiogroup"
       aria-label="Theme selection"
     >

@@ -1,5 +1,7 @@
+import { SessionCamera } from '@/components/monitoring/SessionCamera';
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams,useNavigate } from 'react-router-dom';
 import { Grid3x3, Box, StopCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { BehaviorChip } from '@/components/ui/Chips';
@@ -8,10 +10,13 @@ import * as api from '@/lib/api';
 import { type ExamSession, type DetectionEvent } from '@/lib/types';
 
 export function LiveMonitor() {
+  const liveRevision = useLiveRevision();
+  const navigate=useNavigate();
   const { id } = useParams<{ id: string }>();
   const [session, setSession] = useState<ExamSession | null>(null);
   const [detections, setDetections] = useState<DetectionEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [view, setView] = useState<'2d' | '3d'>('2d');
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
@@ -31,7 +36,7 @@ export function LiveMonitor() {
 
   useEffect(() => {
     if (!id) return;
-    setLoading(true);
+    if (!liveRevision) setLoading(true);
 
     Promise.all([
       api.getSession(id),
@@ -40,7 +45,7 @@ export function LiveMonitor() {
       setSession(sessionRes.data);
       setDetections(detectionsRes.data);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(reason => { setError(reason.message); setLoading(false); });
 
     // Live alerts for this session (Socket.IO, alert:new)
     const unsubscribe = api.subscribeToAlerts(
@@ -53,23 +58,26 @@ export function LiveMonitor() {
     unsubscribeRef.current = unsubscribe;
 
     return () => { unsubscribe(); };
-  }, [id]);
+  }, [id, liveRevision]);
 
   const handleEndSession = async () => {
     if (!id) return;
-    await api.endSession(id);
-    unsubscribeRef.current?.();
-    setSession(prev => prev ? { ...prev, status: 'Completed' as ExamSession['status'] } : null);
+    try {
+      await api.endSession(id);
+      unsubscribeRef.current?.();
+      setSession(prev => prev ? { ...prev, status: 'Completed' as ExamSession['status'] } : null);
+    } catch (reason) { setError((reason as {message:string}).message); }
   };
 
   if (loading) return <LoadingState message="Connecting to monitoring feed..." />;
-  if (!session) return <div className="text-center py-16 text-(--color-text-muted)">Session not found</div>;
+  if (!session) return <div role="alert" className="text-center py-16 text-(--color-text-muted)">{error || 'Session not found'}</div>;
 
   const scores = seatScores();
-  const totalSeats = session.totalSeats || 48;
+  const totalSeats = session.totalSeats || 0;
 
   return (
     <div>
+      {error && <p role="alert" className="text-(--color-error) mb-4">{error}</p>}
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div>
@@ -87,7 +95,7 @@ export function LiveMonitor() {
               <Grid3x3 size={14} className="inline mr-1" />2D
             </button>
             <button onClick={() => setView('3d')} className={`px-3 py-1.5 rounded-[4px] text-label font-medium transition-colors cursor-pointer ${view === '3d' ? 'bg-(--color-bg-surface) text-(--color-text-primary) shadow-[var(--shadow-surface)]' : 'text-(--color-text-muted)'}`}>
-              <Box size={14} className="inline mr-1" />3D
+              <Box size={14} className="inline mr-1" />Perspective
             </button>
           </div>
           {session.status === 'In Progress' && (
@@ -101,29 +109,24 @@ export function LiveMonitor() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main: Seat Grid */}
         <div className="lg:col-span-2">
-          {/* Camera feed placeholder */}
-          <div className="bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default) mb-4 aspect-video flex items-center justify-center relative overflow-hidden">
-            <div className="absolute top-3 left-3 flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-(--color-error) animate-pulse" />
-              <span className="text-label text-(--color-text-muted)">Camera feed, {session.classroomName}</span>
-            </div>
-            <p className="text-body-sm text-(--color-text-muted)">Camera feed placeholder — real video would appear here</p>
-          </div>
+          <SessionCamera sessionId={session.id} active={session.status === 'In Progress'} />
 
           {/* 2D Seat Grid — the bold element */}
-          {view === '2d' ? (
+          {(
             <div className="bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default) p-4">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-heading text-(--color-text-primary)">Seat grid</h2>
                 <span className="text-label text-(--color-text-muted)">{scores.size} active alerts of {totalSeats} seats</span>
               </div>
-              <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${Math.min(8, Math.ceil(Math.sqrt(totalSeats)))}, 1fr)` }}>
+              <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${Math.max(1,Math.min(8, Math.ceil(Math.sqrt(totalSeats))))}, 1fr)`, transform:view==='3d'?'perspective(900px) rotateX(25deg)':undefined }}>
                 {Array.from({ length: totalSeats }, (_, i) => i + 1).map(seatNum => {
                   const data = scores.get(seatNum);
                   const intensity = data ? Math.min(1, data.score) : 0;
                   return (
                     <button
                       key={seatNum}
+                      disabled={!data}
+                      onClick={()=>{ const event=detections.find(value=>value.seatNumber===seatNum&&(value.status==='New'||value.status==='Reviewed')); if(event) navigate(`/teacher/alerts?alert=${event.id}`); }}
                       className="aspect-square rounded-[4px] flex items-center justify-center text-label font-medium transition-all cursor-pointer relative group"
                       style={{
                         backgroundColor: intensity > 0
@@ -164,16 +167,6 @@ export function LiveMonitor() {
                   <div className="w-4 h-4 rounded-[2px]" style={{ backgroundColor: 'rgba(220, 38, 38, 0.6)' }} />
                   <span className="text-label text-(--color-text-muted)">High</span>
                 </div>
-              </div>
-            </div>
-          ) : (
-            /* 3D placeholder — would use R3F in full implementation */
-            <div className="bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default) p-4 min-h-[300px] flex items-center justify-center">
-              <div className="text-center">
-                <Box size={32} className="mx-auto mb-2 text-(--color-text-muted)" />
-                <p className="text-body text-(--color-text-primary) font-medium">3D Room View</p>
-                <p className="text-body-sm text-(--color-text-muted)">Perspective seat grid with real-time suspicion indicators</p>
-                <p className="text-label text-(--color-warning) mt-2">WebGL 3D view active — seats glow based on suspicion scores</p>
               </div>
             </div>
           )}

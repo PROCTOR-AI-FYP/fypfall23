@@ -52,8 +52,13 @@ class SupabaseStorage:
             response.raise_for_status()
 
     async def delete(self, paths: list[str]) -> None:
+        from app.services.camera import local_snapshot_path
         by_bucket: dict[str, list[str]] = {}
         for path in paths:
+            local = local_snapshot_path(path)
+            if local is not None:
+                local.unlink(missing_ok=True)
+                continue
             bucket, key = split_storage_path(path)
             by_bucket.setdefault(bucket, []).append(key)
         async with self._client() as http:

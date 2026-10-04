@@ -13,6 +13,7 @@ from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import PlainTextResponse
 
 from app.audit import ACTION_CASE_TRANSITION, ACTION_NOTICE_GENERATED, ACTION_PENALTY_ISSUED, record_audit
 from app.deps import CurrentUser, get_client_ip, get_db, get_rls_db, require_any_role, require_role
@@ -99,6 +100,26 @@ async def get_case(
     if case is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERR_NOT_FOUND)
     return case
+
+
+@router.get("/api/cases/{case_id}/notice", response_class=PlainTextResponse)
+async def download_notice(
+    case_id: UUID,
+    current_user: CurrentUser = Depends(require_any_role),
+    conn: asyncpg.Connection = Depends(get_rls_db),
+) -> PlainTextResponse:
+    case = await fetch_case(conn, str(case_id), role=current_user.role, user_id=current_user.user_id, with_timeline=False)
+    if case is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, ERR_NOT_FOUND)
+    row = await conn.fetchrow('SELECT notice_document, revoked_at FROM penalties WHERE case_id=$1', case_id)
+    if row is None or not row['notice_document']:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, 'No notice is available for this case.')
+    if row['revoked_at']:
+        raise HTTPException(status.HTTP_409_CONFLICT, 'This penalty has been revoked.')
+    return PlainTextResponse(row['notice_document'], headers={
+        'Content-Disposition': f'attachment; filename="notice-{case_id}.txt"',
+        'Cache-Control': 'no-store',
+    })
 
 
 @router.post("/api/cases/{case_id}/transitions", response_model=CaseDetailOut)

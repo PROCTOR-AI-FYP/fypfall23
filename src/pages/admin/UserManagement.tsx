@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { DataTable, type Column } from '@/components/ui/DataTable';
@@ -26,6 +27,7 @@ export function inferRoleConstraint(email: string): RoleConstraint {
 }
 
 export function UserManagement() {
+  const liveRevision = useLiveRevision();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -39,14 +41,14 @@ export function UserManagement() {
   const [saving, setSaving] = useState(false);
 
   const loadUsers = () => {
-    setLoading(true);
+    if (!liveRevision) setLoading(true);
     setError('');
     const filters = roleFilter ? { role: roleFilter as Role } : undefined;
     api.getUsers(filters).then(res => { setUsers(res.data); setLoading(false); })
       .catch(e => { setError(e.message || 'Failed to load users'); setLoading(false); });
   };
 
-  useEffect(() => { loadUsers(); }, [roleFilter]);
+  useEffect(() => { loadUsers(); }, [roleFilter, liveRevision]);
 
   // Guidance only applies while creating a new user — legacy fixture
   // accounts (e.g. name-based student emails) must remain editable without

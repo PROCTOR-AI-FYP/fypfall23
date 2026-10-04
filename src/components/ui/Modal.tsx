@@ -34,7 +34,7 @@ export function Modal({ isOpen, onClose, title, children, footer, size = 'md' }:
       if (e.key !== 'Tab' || !modalRef.current) return;
 
       const focusable = modalRef.current.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
       );
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
@@ -58,21 +58,16 @@ export function Modal({ isOpen, onClose, title, children, footer, size = 'md' }:
 
   // Initial focus management
   useEffect(() => {
-    if (isOpen) {
-      previousFocus.current = document.activeElement as HTMLElement;
-      document.body.style.overflow = 'hidden';
-
-      requestAnimationFrame(() => {
-        modalRef.current?.focus();
-      });
-    }
+    if (!isOpen) return;
+    previousFocus.current = document.activeElement as HTMLElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const frame = requestAnimationFrame(() => modalRef.current?.focus());
 
     return () => {
-      document.body.style.overflow = '';
-      if (!isOpen) { // Wait, the cleanup runs on unmount or when isOpen changes.
-        // It's safer to just let the previous focus be restored.
-        previousFocus.current?.focus();
-      }
+      cancelAnimationFrame(frame);
+      document.body.style.overflow = previousOverflow;
+      if (previousFocus.current?.isConnected) previousFocus.current.focus();
     };
   }, [isOpen]);
 
@@ -81,13 +76,13 @@ export function Modal({ isOpen, onClose, title, children, footer, size = 'md' }:
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="pa-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4"
       onClick={(e) => {
         if (e.target === overlayRef.current) onClose();
       }}
     >
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px]" />
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px]" onClick={onClose} aria-hidden="true" />
 
       {/* Modal */}
       <div
@@ -97,7 +92,7 @@ export function Modal({ isOpen, onClose, title, children, footer, size = 'md' }:
         aria-label={title}
         tabIndex={-1}
         className={`
-          relative w-full ${sizeClasses[size]}
+          pa-modal relative w-full ${sizeClasses[size]}
           bg-(--color-bg-surface-overlay) rounded-[8px]
           border border-(--color-border-default)
           shadow-[var(--shadow-overlay)]

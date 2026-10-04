@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { Users, Building2, ShieldCheck, Activity } from 'lucide-react';
 import { StatCard } from '@/components/ui/DataDisplay';
@@ -22,15 +23,17 @@ function sameDay(iso: string, day: Date): boolean {
 }
 
 export function AdminDashboard() {
+  const liveRevision = useLiveRevision();
   const [recentActivity, setRecentActivity] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<AdminStats | null>(null);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     api.getAuditLog().then(res => {
       setRecentActivity(res.data.slice(0, 5));
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(reason => { setError(reason.message); setLoading(false); });
 
     Promise.all([api.getUsers(), api.getSessions({ status: SessionStatus.InProgress }), api.getCases(), api.getClassrooms()])
       .then(([usersRes, sessionsRes, casesRes, classroomsRes]) => {
@@ -51,13 +54,15 @@ export function AdminDashboard() {
           caseTrend: percentChange(casesToday, casesYesterday),
           camerasOnline: `${online}/${classroomsRes.total}`,
         });
+        setError('');
       })
-      .catch(() => { /* cards keep their placeholder */ });
-  }, []);
+      .catch(reason => setError(reason.message));
+  }, [liveRevision]);
 
   return (
     <div>
       <h1 className="text-display-lg text-(--color-text-primary) mb-6">Admin Dashboard</h1>
+      {error && <p role="alert" className="text-(--color-error) mb-4">{error}</p>}
 
       {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">

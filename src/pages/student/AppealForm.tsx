@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Send } from 'lucide-react';
@@ -8,6 +9,7 @@ import * as api from '@/lib/api';
 import type { Case } from '@/lib/types';
 
 export function AppealForm() {
+  const liveRevision = useLiveRevision();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -22,7 +24,7 @@ export function AppealForm() {
     if (!id) return;
     api.getCase(id).then(r => { setCaseData(r.data); setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
-  }, [id]);
+  }, [id, liveRevision]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

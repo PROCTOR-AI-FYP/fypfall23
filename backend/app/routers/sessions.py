@@ -212,4 +212,6 @@ async def end_session(
             ip_address=get_client_ip(request),
         )
     forget_session_meta(str(session_id))
+    from app.services.camera import platform_camera
+    await platform_camera.stop(str(session_id))
     return row_to_session(await conn.fetchrow(f"{SESSION_SELECT} WHERE s.id = $1", session_id))

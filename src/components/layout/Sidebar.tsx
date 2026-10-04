@@ -6,7 +6,7 @@ import {
   Eye, Inbox, ClipboardList, BarChart3,
   Calendar, UserCheck, History, TrendingUp,
   FolderOpen, FileQuestion,
-  PanelLeftClose, PanelLeftOpen,
+  PanelLeftClose, PanelLeftOpen, ArrowUpRight, X, FileUp,
 } from 'lucide-react';
 import { Logo } from '@/components/ui/Logo';
 import type { ReactNode } from 'react';
@@ -22,6 +22,7 @@ const navItems: NavItem[] = [
   // Admin
   { label: 'Dashboard', path: '/admin/dashboard', icon: <LayoutDashboard size={18} />, roles: [Role.Admin] },
   { label: 'User Management', path: '/admin/users', icon: <Users size={18} />, roles: [Role.Admin] },
+  { label: 'CSV Imports', path: '/admin/imports', icon: <FileUp size={18} />, roles: [Role.Admin] },
   { label: 'Classrooms', path: '/admin/classrooms', icon: <Building2 size={18} />, roles: [Role.Admin] },
   { label: 'Thresholds', path: '/admin/thresholds', icon: <Sliders size={18} />, roles: [Role.Admin] },
   { label: 'Audit Log', path: '/admin/audit-log', icon: <FileText size={18} />, roles: [Role.Admin] },
@@ -33,15 +34,16 @@ const navItems: NavItem[] = [
 
   // Teacher
   { label: 'Session Setup', path: '/teacher/session-setup', icon: <ClipboardList size={18} />, roles: [Role.Teacher] },
-  { label: 'Live Monitor', path: '/teacher/live-monitor/ses-001', icon: <Eye size={18} />, roles: [Role.Teacher] },
+  { label: 'Live Monitor', path: '/teacher/live-monitor', icon: <Eye size={18} />, roles: [Role.Teacher] },
   { label: 'Alert Inbox', path: '/teacher/alerts', icon: <Inbox size={18} />, roles: [Role.Teacher] },
-  { label: 'Session Report', path: '/teacher/session-report/ses-003', icon: <BarChart3 size={18} />, roles: [Role.Teacher] },
+  { label: 'Session Report', path: '/teacher/session-report', icon: <BarChart3 size={18} />, roles: [Role.Teacher] },
 
   // Student
   { label: 'My Cases', path: '/student/cases', icon: <FolderOpen size={18} />, roles: [Role.Student] },
 
   // Exam Controller
   { label: 'Exam Schedule', path: '/exam-controller/schedule', icon: <Calendar size={18} />, roles: [Role.ExamController] },
+  { label: 'CSV Imports', path: '/exam-controller/imports', icon: <FileUp size={18} />, roles: [Role.ExamController] },
   { label: 'Assignments', path: '/exam-controller/assignments', icon: <UserCheck size={18} />, roles: [Role.ExamController] },
   { label: 'Session History', path: '/exam-controller/history', icon: <History size={18} />, roles: [Role.ExamController] },
   { label: 'Reports', path: '/exam-controller/reports', icon: <TrendingUp size={18} />, roles: [Role.ExamController] },
@@ -50,9 +52,11 @@ const navItems: NavItem[] = [
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
+  onNavigate?: () => void;
+  mobileOpen?: boolean;
 }
 
-export function Sidebar({ collapsed, onToggle }: SidebarProps) {
+export function Sidebar({ collapsed, onToggle, onNavigate, mobileOpen }: SidebarProps) {
   const { user } = useAuth();
   if (!user) return null;
 
@@ -60,8 +64,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   return (
     <aside
+      id="workspace-navigation"
+      role={mobileOpen ? 'dialog' : undefined}
+      aria-modal={mobileOpen || undefined}
+      aria-label="Workspace navigation"
       className={`
-        h-screen flex flex-col
+        portal-sidebar h-screen flex flex-col
         bg-(--color-bg-surface) border-r border-(--color-border-default)
         transition-all duration-200
         ${collapsed ? 'w-16' : 'w-60'}
@@ -75,7 +83,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             ProctorAI
           </span>
         )}
+        <button className="sidebar-mobile-close" onClick={onNavigate} aria-label="Close navigation drawer"><X size={18} /></button>
       </div>
+
+      {!collapsed && <div className="sidebar-workspace-label"><span>WORKSPACE</span><span>{user.role}</span></div>}
 
       {/* Nav items */}
       <nav className="flex-1 overflow-y-auto py-3 px-2">
@@ -84,8 +95,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             <li key={item.path}>
               <NavLink
                 to={item.path}
+                onClick={onNavigate}
                 className={({ isActive }) => `
-                  flex items-center gap-3 px-3 py-2.5 rounded-[6px]
+                  sidebar-link flex items-center gap-3 px-3 py-2.5 rounded-[6px]
                   text-body-sm font-medium transition-colors
                   ${isActive
                     ? 'bg-(--color-accent-primary-subtle) text-(--color-accent-primary)'
@@ -103,6 +115,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </ul>
       </nav>
 
+      {!collapsed && <NavLink to="/" onClick={onNavigate} className="sidebar-about"><Shield size={18} /><div><strong>Designed for trust.</strong><span>Explore ProctorAI</span></div><ArrowUpRight size={15} /></NavLink>}
       {/* Collapse toggle */}
       <div className="p-2 border-t border-(--color-border-default) shrink-0">
         <button

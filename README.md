@@ -1,40 +1,48 @@
 # ProctorAI
 
-AI-powered exam proctoring platform for academic integrity. A ceiling-mounted
-camera per exam hall detects five behaviours (gaze deviation, head-pose
-violation, lip movement, phone detection, unauthorised objects), and confirmed
-incidents follow a real academic-integrity workflow: teacher review → HOD
-penalty → automated notice → student appeal.
+Exam proctoring with Google sign-in and five institutional roles. The current
+local camera integration detects phones and books and monitors calibrated head
+pose. Alerts are attributed to a registered exam seat and enter the existing
+teacher review → HOD decision → penalty → student appeal workflow.
 
-## Current local camera MVP
+## Current local website
 
-The current frontend entry point opens the **Live Alert Inbox**, with live
-phone/book detection from this PC's webcam. Its local backend is
-`backend.main:app` (SQLite + Socket.IO). The authenticated platform source in
-`backend/app/` and the role-specific frontend pages remain in the repository;
-the local camera MVP is the current default frontend.
+The default website is the authenticated role-based platform. It runs
+`app.main:asgi_app` from `backend/`, with the React frontend on port 5173.
+The standalone SQLite camera milestone remains available in `backend/main.py`.
 
-First-time setup on Windows, from the project root (tested with Node 24 and Python 3.14):
+First-time Windows setup (tested with Node 24 and Python 3.14):
 
 ```powershell
 npm ci
 python -m venv venv
-.\venv\Scripts\python.exe -m pip install -r ai-engine/requirements.txt -r backend/requirements-demo.txt
+.\venv\Scripts\python.exe -m pip install -r ai-engine/requirements.txt -r backend/requirements.txt
 .\venv\Scripts\python.exe ai-engine/prepare_models.py
-Copy-Item .env.example .env.local
+# Configure backend/.env and frontend Supabase settings; see the guide below.
 .\scripts\start-local.ps1
 ```
 
-Open **http://127.0.0.1:5173/** and click **Start monitoring**. The local demo
-does not require Supabase configuration. Model weights download once; camera
-inference then runs locally. The model, private camera validation captures,
-local SQLite data, environments and checkpoints are excluded from Git.
+Open **http://127.0.0.1:5173/** and sign in with the institutional Google account.
+The launcher enables the local camera and adds exact localhost/127.0.0.1 origins
+without disabling CSRF protection. `/api` and `/socket.io` use the same-origin
+Vite proxy; set `VITE_API_BASE_URL=` for local development.
 
-Setup, controls, detector limits and validation are documented in
-[the local camera guide](backend/LOCAL_CAMERA_DEMO.md) and
-[the AI engine guide](ai-engine/README.md). The local camera demo has no login
-and binds to this PC's loopback address. The platform architecture and setup
-below describe the separate authenticated backend.
+A Controller schedules an exam and assigns its Teacher. Students must have
+signed in; the Teacher uploads a resolved seat CSV, starts the exam, opens
+**Live Monitor**, selects the registered student seat and starts the camera.
+Set the neutral head pose in normal exam posture. The camera handles **one
+clearly visible student at a time**, rather than automatic full-hall attribution.
+
+**CSV Imports** automates setup from the supplied templates: Admins can upload
+student rosters, classroom inventory, exam schedules and invigilator assignments
+together. Exam Controllers can upload schedules and assignments. Preview checks
+every row and its links; importing saves the entire valid batch together, skips
+exact matches and refreshes the connected portals. Teachers keep the seat-map
+upload workflow, with reusable templates and a seat generator on Session Setup.
+
+See [the local platform guide](backend/LOCAL_PLATFORM.md) for roles, live updates,
+evidence, operational limits and validation. Model weights, private captures,
+local evidence, environments and checkpoints are excluded from Git.
 
 ## Platform architecture
 
@@ -137,7 +145,7 @@ rewrites `/api/*` and `/socket.io/*` to the backend).
 
 ## Running tests
 
-The backend has a comprehensive `pytest` integration suite (252 tests) that
+The backend has a comprehensive `pytest` integration suite (including the camera integration checks) that
 covers: authentication (Google token verification, auto-provisioning, staff
 rejection, re-link prevention), the full case lifecycle (detection → triage →
 confirmation → penalty → appeal), role-based access control for all five roles,
@@ -172,7 +180,7 @@ suite is free and repeatable with no external dependencies.
 
 ## Tech stack
 
-- **Frontend:** Vite · React 18 · TypeScript · Tailwind CSS · React Router ·
+- **Frontend:** Vite · React 19 · TypeScript · Tailwind CSS · React Router ·
   React Three Fiber + drei · Recharts · Socket.IO client
 - **Backend:** FastAPI · asyncpg · python-socketio · Pydantic
 - **Infrastructure:** Supabase (Postgres + Auth + Storage) · Upstash (Redis) ·

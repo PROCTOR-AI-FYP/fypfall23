@@ -1,7 +1,8 @@
+import { IntegrityScene } from '@/components/visual/IntegrityScene';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import gsap from 'gsap';
 import { useNavigate } from 'react-router-dom';
-import { ArrowDown, Eye, Cpu, Lock, ImageIcon, ArrowRight } from 'lucide-react';
+import { ArrowDown, Eye, Cpu, Lock, ArrowRight } from 'lucide-react';
 import { ThemeToggle } from '@/components/layout/ThemeToggle';
 import { useTheme } from '@/lib/theme-context';
 import { Logo } from '@/components/ui/Logo';
@@ -284,14 +285,14 @@ export function LandingPage() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-2xl pt-4 border-t border-(--color-border-default)/70 parallax-hero-pillars">
             <div className="flex flex-col items-center p-3 rounded-xl bg-(--color-bg-surface)/60 border border-(--color-border-default)/60 backdrop-blur-xs shadow-2xs hover:border-(--color-accent-primary)/30 transition-colors">
               <Eye size={18} className="text-(--color-behavior-head) mb-1.5" />
-              <span className="font-[Sora] text-[13px] font-semibold text-(--color-text-primary)">5 Signal Vectors</span>
-              <span className="text-[11px] text-(--color-text-muted)">Gaze, pose, lip, phone &amp; objects</span>
+              <span className="font-[Sora] text-[13px] font-semibold text-(--color-text-primary)">Live Detection</span>
+              <span className="text-[11px] text-(--color-text-muted)">Head pose, phones &amp; books</span>
             </div>
 
             <div className="flex flex-col items-center p-3 rounded-xl bg-(--color-bg-surface)/60 border border-(--color-border-default)/60 backdrop-blur-xs shadow-2xs hover:border-(--color-accent-primary)/30 transition-colors">
               <Cpu size={18} className="text-(--color-accent-primary) mb-1.5" />
-              <span className="font-[Sora] text-[13px] font-semibold text-(--color-text-primary)">Ceiling Sensor Grid</span>
-              <span className="text-[11px] text-(--color-text-muted)">Per-seat real-time calibration</span>
+              <span className="font-[Sora] text-[13px] font-semibold text-(--color-text-primary)">Student Seat Mapping</span>
+              <span className="text-[11px] text-(--color-text-muted)">Registered exam assignments</span>
             </div>
 
             <div className="flex flex-col items-center p-3 rounded-xl bg-(--color-bg-surface)/60 border border-(--color-border-default)/60 backdrop-blur-xs shadow-2xs hover:border-(--color-accent-primary)/30 transition-colors">
@@ -340,13 +341,7 @@ export function LandingPage() {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
             {/* Left: Empty rounded rectangle slot for an image */}
             <div className="lg:col-span-5 w-full parallax-about-image">
-              <div className="w-full aspect-[4/3] max-w-[420px] mx-auto rounded-2xl border-2 border-dashed border-white/35 bg-white/10 backdrop-blur-xs flex flex-col items-center justify-center p-8 text-center shadow-lg transition-all duration-300 hover:border-white/50 hover:bg-white/[0.14] group">
-                <div className="w-16 h-16 rounded-xl bg-white/15 flex items-center justify-center mb-3 text-white/80 group-hover:scale-105 transition-transform shadow-xs">
-                  <ImageIcon size={32} className="stroke-[1.75]" />
-                </div>
-                <span className="text-body font-semibold text-white/95 mb-1">Image Slot</span>
-                <span className="text-label text-blue-100/70">Visual asset placeholder</span>
-              </div>
+              <IntegrityScene />
             </div>
 
             {/* Right: Large text saying About Us with description */}
@@ -361,13 +356,13 @@ export function LandingPage() {
 
               <div className="space-y-3 text-body sm:text-[15px] text-blue-50/90 leading-relaxed font-normal max-w-2xl">
                 <p>
-                  Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+                  ProctorAI connects live exam monitoring with a clear review process. Invigilators receive sustained phone, book and head-pose signals linked to the exam session and its registered student seats.
                 </p>
                 <p>
-                  Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+                  Teachers review detection evidence, the Head of Department makes case decisions, and students can view their own cases and submit appeals. Administrators manage access and classrooms while Exam Controllers organize schedules and assignments.
                 </p>
                 <p>
-                  Curabitur pretium tincidunt lacus. Nulla gravida orci a odio. Nullam varius, turpis et commodo pharetra, est eros bibendum elit, nec luctus magna felis sollicitudin mauris.
+                  Detection signals support human review. Head orientation alone does not establish misconduct, and the current local camera monitors one explicitly assigned student per view.
                 </p>
               </div>
 
@@ -406,7 +401,7 @@ export function LandingPage() {
             <span>ProctorAI University Examination System — Pilot Deployment</span>
           </div>
           <div>
-            <span>Evidentiary integrity · Multi-camera spatial inference · FERPA compliant</span>
+            <span>Live observation · Human review · Student voice</span>
           </div>
         </footer>
       </section>

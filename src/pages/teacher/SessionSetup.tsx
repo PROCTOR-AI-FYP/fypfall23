@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
@@ -5,6 +6,7 @@ import { FormField, Select, Input } from '@/components/ui/FormElements';
 import { Upload, Play, CheckCircle2, AlertTriangle, Clock } from 'lucide-react';
 import * as api from '@/lib/api';
 import type { Classroom } from '@/lib/types';
+import { SetupToolkit } from '@/components/setup/SetupToolkit';
 
 type SeatRow = api.SeatMapPreviewRow;
 type SeatRowStatus = SeatRow['status'];
@@ -22,6 +24,7 @@ const statusIcons: Record<SeatRowStatus, typeof CheckCircle2> = {
 };
 
 export function SessionSetup() {
+  const liveRevision = useLiveRevision();
   const navigate = useNavigate();
   const [classroomId, setClassroomId] = useState('');
   const [silentMode, setSilentMode] = useState(false);
@@ -37,13 +40,18 @@ export function SessionSetup() {
     api.getClassrooms()
       .then(res => setClassrooms(res.data))
       .catch(err => setErrors(prev => ({ ...prev, classroom: (err as { message?: string }).message || 'Could not load classrooms' })));
-  }, []);
+  }, [liveRevision]);
 
   const allResolved = seatRows.length > 0 && seatRows.every(r => r.status === 'Resolved');
 
   const handleCsvUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    await resolveSeatFile(file);
+    e.target.value = '';
+  };
+
+  const resolveSeatFile = async (file: File) => {
     setCsvError('');
     setSeatRows([]);
     setSeatFile(null);
@@ -84,7 +92,9 @@ export function SessionSetup() {
       <h1 className="text-display-lg text-(--color-text-primary) mb-2">Session Setup</h1>
       <p className="text-body text-(--color-text-secondary) mb-8">Configure and start a proctoring session for an exam</p>
 
-      <div className="space-y-6">
+      <div className="mb-5"><SetupToolkit capacity={classrooms.find(c=>c.id===classroomId)?.capacity} roomName={classrooms.find(c=>c.id===classroomId)?.name} onUseCsv={resolveSeatFile}/></div>
+
+      <div className="pa-form-sheet space-y-6">
         <FormField label="Classroom" error={errors.classroom} required>
           <Select value={classroomId} onChange={e => setClassroomId(e.target.value)} hasError={!!errors.classroom}>
             <option value="">Select a classroom...</option>
@@ -92,7 +102,7 @@ export function SessionSetup() {
               <option key={c.id} value={c.id}>{c.name} — {c.building} (capacity {c.capacity})</option>
             ))}
           </Select>
-          {classroomId && !onlineClassrooms.find(c => c.id === classroomId)?.seatMap && (
+          {classroomId && !onlineClassrooms.find(c => c.id === classroomId)?.seatMap?.length && (
             <p className="text-label text-(--color-warning) mt-1">This classroom has no seat map configured. Detection accuracy may be reduced.</p>
           )}
         </FormField>

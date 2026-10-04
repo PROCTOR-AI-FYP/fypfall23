@@ -1,6 +1,6 @@
 """Local camera bridge: one camera, latest-frame AI, JPEG feed and real alerts.
 
-This belongs to the local SQLite demo (backend.main), not the hosted platform.
+Shared by the local role-based platform and the standalone SQLite demo.
 No GUI window or browser-to-cloud camera upload is involved.
 """
 from __future__ import annotations
@@ -31,12 +31,21 @@ def runtime_factory():
     return RealtimeEngine(lambda: PhoneDetector(full_imgsz=640, min_hits=1))
 
 
+def head_factory():
+    _add_engine_path()
+    from head_pose_detector import HeadPoseDetector
+    return HeadPoseDetector()
+
+
 class ObjectMonitor:
-    def __init__(self, alert_sink, *, runtime=None, camera=None, scorer=None):
+    def __init__(self, alert_sink, *, runtime=None, camera=None, scorer=None, head=None, evidence=False):
         self._sink = alert_sink
         self._runtime_factory = runtime or runtime_factory
         self._camera_factory = camera or camera_factory
         self._scorer_factory = scorer
+        self._head_factory = head or head_factory
+        self._evidence = evidence
+        self._calibrate_head = threading.Event()
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
@@ -49,7 +58,7 @@ class ObjectMonitor:
     def _initial_state():
         return dict(phase='stopped', session_id=None, fps=0., ai_seconds=0.,
                     objects=[], checking=[], error=None, alert_error=None,
-                    last_alert=None, resolution=None, detector=None)
+                    last_alert=None, resolution=None, detector=None, head_pose=None, head_error=None)
 
     def status(self):
         with self._lock:
@@ -65,9 +74,19 @@ class ObjectMonitor:
             self._state = {**self._initial_state(), 'phase': 'loading', 'session_id': session_id}
             self._jpeg = None
             self._stop = threading.Event()
+            self._calibrate_head.clear()
             self._thread = threading.Thread(target=self._capture, args=(session_id, loop),
                                             name='proctorai-web-camera', daemon=True)
             self._thread.start()
+        return self.status()
+
+    def calibrate_head(self):
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive() or self._stop.is_set():
+                raise RuntimeError('Start monitoring before calibrating head pose.')
+            if self._state['head_error']:
+                raise RuntimeError(self._state['head_error'])
+            self._calibrate_head.set()
         return self.status()
 
     def stop(self, timeout=5):
@@ -77,6 +96,7 @@ class ObjectMonitor:
                 self._state['phase'] = 'stopping'
                 self._stop.set()
             self._jpeg = None
+            self._state['head_pose'] = None
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout)
         return self.status()
@@ -91,11 +111,15 @@ class ObjectMonitor:
 
     def _capture(self, session_id, loop):
         import cv2
-        cap = runtime = pending = None
+        cap = runtime = pending = head = None
         failed = False
         try:
             cap = self._camera_factory()
             runtime = self._runtime_factory()
+            try:
+                head = self._head_factory()
+            except Exception as exc:
+                self._publish(head_error=str(exc))
             if self._scorer_factory:
                 scorer = self._scorer_factory()
             else:
@@ -106,6 +130,8 @@ class ObjectMonitor:
             frames = 0
             last_sample, last_sent, last_attempt = -float('inf'), {}, -float('inf')
             submitted = None
+            head_signal = None
+            last_head = -float('inf')
             while not self._stop.is_set():
                 ok, frame = cap.read()
                 if not ok:
@@ -114,6 +140,21 @@ class ObjectMonitor:
                 events = runtime.update(frame, now)
                 if runtime.error:
                     raise RuntimeError(runtime.error)
+                if head is not None and now-last_head >= 1/12:
+                    last_head = now
+                    try:
+                        if self._calibrate_head.is_set():
+                            self._calibrate_head.clear()
+                            head.begin_calibration()
+                        head_signal = head.process_frame(frame,now)
+                        with self._lock:
+                            if not self._stop.is_set():
+                                self._state['head_pose'] = head.status()
+                    except Exception as exc:
+                        self._publish(head_error=str(exc),head_pose=None)
+                        head.close()
+                        head = None
+                        head_signal = None
                 if pending is not None and pending.done():
                     try:
                         recorded = pending.result()
@@ -124,16 +165,33 @@ class ObjectMonitor:
                     pending = None
                 if now - last_sample >= 1/6:
                     last_sample = now
-                    alert = scorer.update({e.type for e in events}, time.time())
+                    signals = {e.type for e in events}
+                    if head_signal is not None and now-last_head <= .5:
+                        signals.add(head_signal.type)
+                    signal_scores = {e.type: e.confidence for e in events}
+                    if head_signal is not None and now-last_head <= .5:
+                        signal_scores[head_signal.type] = head_signal.confidence
+                    alert = (scorer.update_scores(signal_scores, time.time())
+                             if hasattr(scorer, 'update_scores') else scorer.update(signals, time.time()))
                     if alert:
                         kind = '+'.join(sorted(alert.active_signals))
                         if (pending is None and now-last_sent.get(kind, -float('inf')) >= 20
                                 and now-last_attempt >= 5):
                             submitted = dict(session_id=session_id, type=kind,
                                              confidence=alert.score, timestamp=alert.timestamp)
+                            if self._evidence:
+                                evidence_frame = runtime.annotate_frame(frame)
+                                if head is not None:
+                                    evidence_frame = head.annotate_frame(evidence_frame)
+                                encoded, image = cv2.imencode('.jpg', evidence_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                                if not encoded:
+                                    raise RuntimeError('Could not encode detection evidence.')
+                                submitted.update(snapshot=image.tobytes(), per_signal=alert.per_signal)
                             last_attempt = now
                             pending = asyncio.run_coroutine_threadsafe(self._sink(submitted), loop)
                 annotated = runtime.annotate_frame(frame)
+                if head is not None:
+                    annotated = head.annotate_frame(annotated)
                 height, width = frame.shape[:2]
                 # AI sees the original camera resolution. Only transport is resized.
                 if width > 960:
@@ -178,10 +236,12 @@ class ObjectMonitor:
                 cap.release()
             if runtime is not None:
                 runtime.close()
+            if head is not None:
+                head.close()
             # An already-confirmed alert may finish saving, but a stopped camera
             # cannot retain current object indicators or a stale video frame.
             with self._lock:
                 self._jpeg = None
-                self._state.update(objects=[], checking=[], fps=0.)
+                self._state.update(objects=[], checking=[], fps=0.,head_pose=None)
                 if not failed:
                     self._state['phase'] = 'stopped'

@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { X, Bell, CheckCheck } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
@@ -10,19 +11,20 @@ interface NotificationPanelProps {
 }
 
 export function NotificationPanel({ isOpen, onClose }: NotificationPanelProps) {
+  const liveRevision = useLiveRevision();
   const { user } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (isOpen && user) {
-      setLoading(true);
+      if (!liveRevision) setLoading(true);
       api.getNotifications(user.id).then(res => {
         setNotifications(res.data);
         setLoading(false);
       }).catch(() => setLoading(false));
     }
-  }, [isOpen, user]);
+  }, [isOpen, user, liveRevision]);
 
   const handleMarkRead = async (id: string) => {
     await api.markNotificationRead(id);
@@ -53,7 +55,7 @@ export function NotificationPanel({ isOpen, onClose }: NotificationPanelProps) {
       <div className="fixed inset-0 z-40" onClick={onClose} />
 
       {/* Panel */}
-      <div className="fixed right-0 top-0 h-full w-96 max-w-[calc(100vw-16px)] bg-(--color-bg-surface) border-l border-(--color-border-default) shadow-[var(--shadow-overlay)] z-50 flex flex-col">
+      <div className="pa-notification-panel fixed right-0 top-0 h-full w-96 max-w-[calc(100vw-16px)] bg-(--color-bg-surface) border-l border-(--color-border-default) shadow-[var(--shadow-overlay)] z-50 flex flex-col">
         {/* Header */}
         <div className="h-14 px-4 flex items-center justify-between border-b border-(--color-border-default) shrink-0">
           <div className="flex items-center gap-2">

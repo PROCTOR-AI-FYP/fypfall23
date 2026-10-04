@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_env: Literal["development", "test", "production"] = "development"
+    local_camera_enabled: bool = False
 
     # --- Core institutional rule ---
     # Comma-separated list of institutional email domains. The first is the

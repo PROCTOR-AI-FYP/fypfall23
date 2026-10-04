@@ -8,7 +8,7 @@ export function ConfidenceBar({ value, showLabel = true }: { value: number; show
     'var(--color-success)';
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="pa-confidence flex items-center gap-2">
       <div className="flex-1 h-2 bg-(--color-bg-surface-raised) rounded-[2px] overflow-hidden min-w-[60px]">
         <div
           className="h-full rounded-[2px] transition-all duration-300"
@@ -27,6 +27,9 @@ export function ConfidenceBar({ value, showLabel = true }: { value: number; show
 // ── Stat Card ──────────────────────────────
 
 import type { ReactNode } from 'react';
+import { useReducedMotion } from 'motion/react';
+import SpotlightCard from '@/components/reactbits/SpotlightCard';
+import CountUp from '@/components/reactbits/CountUp';
 
 interface StatCardProps {
   icon: ReactNode;
@@ -37,13 +40,14 @@ interface StatCardProps {
 }
 
 export function StatCard({ icon, label, value, trend, color }: StatCardProps) {
+  const reducedMotion = useReducedMotion();
   return (
-    <div className="bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default) p-5">
+    <SpotlightCard className="pa-stat-card" spotlightColor="rgba(40, 180, 240, 0.16)">
       <div className="flex items-start justify-between mb-3">
         <div
-          className="w-9 h-9 rounded-[6px] flex items-center justify-center"
+          className="pa-stat-icon w-9 h-9 rounded-[6px] flex items-center justify-center"
           style={{
-            backgroundColor: color ? `${color}15` : 'var(--color-accent-primary-subtle)',
+            backgroundColor: color ? `color-mix(in srgb, ${color} 12%, transparent)` : 'var(--color-accent-primary-subtle)',
             color: color || 'var(--color-accent-primary)',
           }}
         >
@@ -57,9 +61,9 @@ export function StatCard({ icon, label, value, trend, color }: StatCardProps) {
           </span>
         )}
       </div>
-      <p className="text-stat text-(--color-text-primary)">{value}</p>
+      <p className="pa-stat-value text-stat text-(--color-text-primary)">{typeof value === 'number' && !reducedMotion ? <><span className="sr-only">{value}</span><span aria-hidden="true"><CountUp to={value} duration={0.6} separator="," /></span></> : value}</p>
       <p className="text-body-sm text-(--color-text-secondary) mt-1">{label}</p>
-    </div>
+    </SpotlightCard>
   );
 }
 
@@ -77,7 +81,7 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
+    <div className="pa-empty-state flex flex-col items-center justify-center py-16 px-6 text-center">
       {icon && (
         <div className="w-12 h-12 rounded-full bg-(--color-bg-surface-raised) flex items-center justify-center text-(--color-text-muted) mb-4">
           {icon}
@@ -122,7 +126,7 @@ export function ErrorState({
 
 export function LoadingState({ message = 'Loading...' }: { message?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center py-16 px-6">
+    <div className="pa-loading-state flex flex-col items-center justify-center py-16 px-6" role="status">
       <div className="h-8 w-8 border-2 border-(--color-accent-primary) border-t-transparent rounded-full animate-spin mb-4" />
       <p className="text-body-sm text-(--color-text-muted)">{message}</p>
     </div>

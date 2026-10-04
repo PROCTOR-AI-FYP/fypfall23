@@ -264,11 +264,18 @@ async def test_end_to_end_detection_reaches_connected_socketio_client(
     teacher_token = await login(client, TEACHER_EMAIL)
     student_token = await login(client, STUDENT_A_EMAIL)
 
-    for rejected_headers in ({}, session_cookie("not-a-jwt"), session_cookie(student_token)):
+    for rejected_headers in ({}, session_cookie("not-a-jwt")):
         client_socket = socketio.AsyncClient()
         with pytest.raises(socketio.exceptions.ConnectionError):
             await client_socket.connect(live_server, headers=rejected_headers, transports=["websocket"])
 
+    student = socketio.AsyncClient()
+    student_alerts: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    student.on(sockets.EVENT_ALERT_NEW, student_alerts.put)
+    student_changes: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    student.on('sync:changed', student_changes.put)
+    await student.connect(live_server,headers=session_cookie(student_token),transports=['websocket'])
+    assert await student.call(sockets.EVENT_JOIN_SESSION,{'session_id':active_session}) == {'ok':False,'error':'forbidden'}
     teacher = socketio.AsyncClient()
     received: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     teacher.on(sockets.EVENT_ALERT_NEW, received.put)
@@ -288,8 +295,11 @@ async def test_end_to_end_detection_reaches_connected_socketio_client(
         event = await asyncio.wait_for(received.get(), timeout=5)
         assert event["case_id"] == response.json()["id"]
         assert event["behaviour_types"] == ["PHONE_DETECTED", "HEAD_POSE_VIOLATION"]
+        assert await asyncio.wait_for(student_changes.get(),timeout=5) == {}
+        assert student_alerts.empty()
     finally:
         await teacher.disconnect()
+        await student.disconnect()
 
 
 class _RecordingClient:
@@ -350,3 +360,29 @@ async def test_only_well_formed_heartbeats_are_accepted(
 def test_room_slugs_are_topic_safe() -> None:
     assert mqtt.alert_topic("Hall B / East #2") == "proctorai/rooms/hall-b-east-2/alerts"
     assert mqtt.room_slug("+#") == "unassigned"
+
+
+@pytest.mark.parametrize("revocation", ["disabled", "reassigned"])
+async def test_connected_teacher_loses_alert_access_when_permissions_change(
+    client, active_session, live_server, admin_conn, revocation
+):
+    teacher = socketio.AsyncClient()
+    disconnected = asyncio.Event()
+    received = asyncio.Queue()
+    teacher.on(sockets.EVENT_ALERT_NEW, received.put)
+    teacher.on("disconnect", lambda *args: disconnected.set())
+    token = await login(client, TEACHER_EMAIL)
+    teacher_id = str(await admin_conn.fetchval("SELECT id FROM users WHERE email=$1", TEACHER_EMAIL))
+    await teacher.connect(live_server, headers=session_cookie(token), transports=["websocket"])
+    try:
+        assert await teacher.call(sockets.EVENT_JOIN_SESSION, {"session_id": active_session}) == {"ok": True}
+        if revocation == "disabled":
+            await admin_conn.execute("UPDATE users SET status='disabled' WHERE id=$1::uuid", teacher_id)
+        else:
+            await admin_conn.execute("UPDATE exam_sessions SET invigilator_id=NULL WHERE id=$1::uuid", active_session)
+        await sockets.emit_detection(active_session, teacher_id, {"id": "fixture-alert"})
+        await asyncio.wait_for(disconnected.wait(), timeout=5)
+        assert received.empty()
+    finally:
+        if teacher.connected:
+            await teacher.disconnect()

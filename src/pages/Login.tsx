@@ -3,10 +3,11 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '@/lib/auth-context';
 import { Role } from '@/lib/types';
 import { Button } from '@/components/ui/Button';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowUpRight, ShieldCheck, ScanLine, Scale, LockKeyhole } from 'lucide-react';
 import { ThemeToggle } from '@/components/layout/ThemeToggle';
 import { Logo } from '@/components/ui/Logo';
-import { LoginHero3D } from './LoginHero3D';
+import { IntegrityScene } from '@/components/visual/IntegrityScene';
+import StarBorder from '@/components/reactbits/StarBorder';
 
 const roleRedirects: Record<Role, string> = {
   [Role.Admin]: '/admin/dashboard',
@@ -57,138 +58,41 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen w-full bg-(--color-bg-primary) text-(--color-text-primary) flex flex-col justify-between relative overflow-x-hidden">
-      {/* ── Fixed Floating Header ──────────────────────────── */}
-      <header className="w-full flex items-center justify-between px-6 lg:px-12 py-4 z-20">
-        <Link
-          to="/"
-          className="flex items-center gap-3 group outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 rounded-full py-1 px-2 -ml-2 hover:opacity-90 transition-opacity"
-          title="Return to ProctorAI Overview"
-        >
-          <Logo size={28} />
-          <div className="flex flex-col">
-            <span className="font-[Sora] font-bold text-base sm:text-lg tracking-tight text-(--color-text-primary)">
-              ProctorAI
-            </span>
-            <span className="text-[11px] text-(--color-text-muted) -mt-1 hidden sm:block">
-              Academic Integrity Platform
-            </span>
-          </div>
-        </Link>
-
-        <div className="flex items-center gap-3">
-          <Link
-            to="/"
-            className="text-body-sm font-medium text-(--color-text-secondary) hover:text-(--color-text-primary) px-3.5 py-1.5 rounded-full border border-(--color-border-default) bg-(--color-bg-surface)/80 hover:bg-(--color-bg-surface) transition-colors inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
-          >
-            <ArrowLeft size={14} />
-            <span>Overview</span>
-          </Link>
-          <div className="h-4 w-px bg-(--color-border-default)" aria-hidden="true" />
-          <ThemeToggle />
-        </div>
+    <div className="auth-page">
+      <header className="auth-header">
+        <Link to="/" className="auth-brand" aria-label="ProctorAI home"><Logo size={32} /><span>ProctorAI<small>ACADEMIC INTEGRITY</small></span></Link>
+        <div className="auth-header-actions"><Link to="/">Back to overview<ArrowUpRight size={14} /></Link><ThemeToggle /></div>
       </header>
-
-      {/* ── Main Sign In Container ────────────────────────── */}
-      <main className="max-w-6xl mx-auto w-full px-4 sm:px-6 lg:px-12 my-auto py-6 sm:py-8 z-10">
-        {/* Section Heading */}
-        <div className="mb-6 text-center sm:text-left flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-          <div>
-            <div className="text-label text-(--color-accent-primary) font-semibold tracking-wider uppercase mb-1">
-              Security Gateway
-            </div>
-            <h1 className="text-display-md text-(--color-text-primary)">
-              Institutional Access &amp; Live Seat Telemetry
-            </h1>
+      <main className="auth-main">
+        <section className="auth-story">
+          <span className="workspace-eyebrow"><ScanLine size={15} />A clearer perspective</span>
+          <h1>Built to observe.<br />Designed to be <em>fair.</em></h1>
+          <p>Intelligent exam monitoring. Considered human review. One connected academic community.</p>
+          <IntegrityScene />
+          <div className="auth-story-features">
+            <div><ScanLine size={18} /><strong>Observe</strong><span>Signals in context</span></div>
+            <div><ShieldCheck size={18} /><strong>Review</strong><span>Evidence with clarity</span></div>
+            <div><Scale size={18} /><strong>Resolve</strong><span>A fair process</span></div>
           </div>
-          <p className="text-body-sm text-(--color-text-secondary) max-w-md">
-            Please authenticate using your institutional Google workspace credentials. Permissions are assigned based on your academic role.
-          </p>
-        </div>
-
-        {/* Unified Frame containing 3D Hero on Left and Login Card on Right */}
-        <div className="rounded-xl border border-(--color-border-default) bg-(--color-bg-surface) shadow-sm overflow-hidden flex flex-col lg:flex-row min-h-[580px]">
-          {/* Left: 3D Hero Seat Grid */}
-          <div className="hidden lg:flex flex-1 flex-col relative overflow-hidden bg-(--color-bg-primary)/40 border-b lg:border-b-0 lg:border-r border-(--color-border-default) min-h-[460px]">
-            <div className="absolute top-4 left-4 z-10 flex items-center gap-2 px-3 py-1.5 rounded-md bg-(--color-bg-surface)/90 border border-(--color-border-default) backdrop-blur-xs">
-              <span className="w-2 h-2 rounded-full bg-(--color-success) animate-pulse" />
-              <span className="text-label text-(--color-text-secondary) font-medium">Hall-04 Spatial Grid Active</span>
-            </div>
-
-            <div className="flex-1 w-full h-full">
-              <LoginHero3D />
-            </div>
-
-            {/* Overlay info footer */}
-            <div className="p-4 bg-(--color-bg-surface)/90 backdrop-blur-xs border-t border-(--color-border-default)">
-              <div className="flex items-center justify-between text-body-sm">
-                <div className="flex items-center gap-2 text-(--color-success)">
-                  <span className="w-2 h-2 rounded-full bg-(--color-success)" />
-                  <span className="text-label font-medium">Monitoring engine operational</span>
-                </div>
-                <span className="text-label text-(--color-text-muted)">256-bit TLS encrypted session, FERPA compliant</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Right: Sign-in Form */}
-          <div className="w-full lg:w-[460px] flex flex-col justify-center p-8 sm:p-12 bg-(--color-bg-surface)">
-            {/* Emblem */}
-            <div className="flex items-center gap-3 mb-8">
-              <Logo size={42} />
-              <div>
-                <h2 className="font-[Sora] font-bold text-[20px] text-(--color-text-primary) leading-tight">ProctorAI</h2>
-                <p className="text-label text-(--color-text-muted)">Authorized Sign In</p>
-              </div>
-            </div>
-
-            <h3 className="text-display-sm text-(--color-text-primary) mb-2">Sign in</h3>
-            <p className="text-body text-(--color-text-secondary) mb-6">
-              Authenticate with your university credentials to access the proctoring tribunal or invigilation tools.
-            </p>
-
-            {error && (
-              <div role="alert" className="mb-4 px-4 py-3 bg-(--color-error-subtle) border border-(--color-error)/20 rounded-[6px] text-body-sm text-(--color-error)">
-                <p>{error}</p>
-              </div>
-            )}
-
-            <Button
-              type="button"
-              onClick={handleGoogleSignIn}
-              loading={isLoading}
-              size="lg"
-              className="w-full mt-2"
-            >
-              Sign in with Google
+        </section>
+        <section className="auth-signin" aria-labelledby="signin-heading">
+          <div className="auth-signin-top"><span className="auth-signin-icon"><LockKeyhole size={23} /></span><span className="auth-access-label">INSTITUTIONAL ACCESS</span></div>
+          <h2 id="signin-heading">Welcome back.</h2>
+          <p className="auth-signin-description">Your workspace is ready. Sign in with your university Google account to continue.</p>
+          {error && <div role="alert" className="auth-error">{error}</div>}
+          <StarBorder as="div" color="#28c5ef" speed="8s" backgroundColor="var(--color-bg-surface)" textColor="var(--color-text-primary)" borderColor="var(--color-border-default)" className="auth-google-frame">
+            <Button type="button" onClick={handleGoogleSignIn} loading={isLoading} size="lg" className="auth-google-button">
+              <svg width="19" height="19" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2.1H12v4h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.8 3-4.3 3-7.4Z"/><path fill="#34A853" d="M12 22c2.7 0 5-1 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.8-5.6-4.2H3.1v2.6A10 10 0 0 0 12 22Z"/><path fill="#FBBC05" d="M6.4 13.9a6 6 0 0 1 0-3.8V7.5H3.1a10 10 0 0 0 0 9l3.3-2.6Z"/><path fill="#EA4335" d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.8-2.8A9.6 9.6 0 0 0 12 2a10 10 0 0 0-8.9 5.5l3.3 2.6A6 6 0 0 1 12 5.9Z"/></svg>
+              Sign in with Google<ArrowUpRight size={17} />
             </Button>
-
-            <div className="mt-8 pt-6 border-t border-(--color-border-default) space-y-2">
-              <div className="flex items-center justify-between text-label text-(--color-text-muted)">
-                <span>Security Protocol</span>
-                <span className="font-medium text-(--color-text-secondary)">OAuth 2.0 / SSO</span>
-              </div>
-              <div className="flex items-center justify-between text-label text-(--color-text-muted)">
-                <span>System Time (UTC)</span>
-                <span className="font-mono text-body-sm text-(--color-text-secondary)">
-                  {new Date().toISOString().slice(0, 19).replace('T', ' ')}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
+          </StarBorder>
+          <div className="auth-divider"><span />One account. Your assigned role.<span /></div>
+          <div className="auth-roles"><span>Administration</span><span>Examination office</span><span>Invigilation</span><span>Academic review</span><span>Students</span></div>
+          <div className="auth-note"><ShieldCheck size={19} /><p>Access follows your institutional role. Student cases and review evidence are visible only to authorised accounts.</p></div>
+          <div className="auth-signin-footer"><span>University examination platform</span><Logo size={20} /></div>
+        </section>
       </main>
-
-      {/* ── Footer docked at bottom of Login Section ───────── */}
-      <footer className="w-full border-t border-(--color-border-default) bg-(--color-bg-surface)/95 backdrop-blur-xs py-4 px-6 lg:px-12 flex flex-col sm:flex-row items-center justify-between gap-4 text-label text-(--color-text-muted)">
-        <div className="flex items-center gap-2.5">
-          <Logo size={18} />
-          <span>ProctorAI University Examination System — Pilot Deployment</span>
-        </div>
-        <div>
-          <span>Evidentiary integrity · Multi-camera spatial inference · FERPA compliant</span>
-        </div>
-      </footer>
+      <footer className="auth-footer"><span>ProctorAI · Academic integrity, thoughtfully.</span><span>Observe. Review. Resolve.</span></footer>
     </div>
   );
 }

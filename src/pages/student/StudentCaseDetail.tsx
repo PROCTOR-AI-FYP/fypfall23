@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Scale, Download } from 'lucide-react';
@@ -8,6 +9,7 @@ import * as api from '@/lib/api';
 import { type Case, CaseStatus } from '@/lib/types';
 
 export function StudentCaseDetail() {
+  const liveRevision = useLiveRevision();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [caseData, setCaseData] = useState<Case | null>(null);
@@ -17,12 +19,12 @@ export function StudentCaseDetail() {
     if (!id) return;
     api.getCase(id).then(r => { setCaseData(r.data); setLoading(false); })
       .catch(() => setLoading(false));
-  }, [id]);
+  }, [id, liveRevision]);
 
   if (loading) return <LoadingState />;
   if (!caseData) return <div className="text-center py-16 text-(--color-text-muted)">Case not found</div>;
 
-  const canAppeal = caseData.status === CaseStatus.Confirmed && caseData.penalty && !caseData.appeal;
+  const canAppeal = caseData.status === CaseStatus.Confirmed && caseData.penalty && !caseData.penalty.revokedAt && !caseData.appeal;
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -54,14 +56,14 @@ export function StudentCaseDetail() {
         {/* Penalty details if any */}
         {caseData.penalty && (
           <div className="bg-(--color-bg-surface) rounded-[6px] border border-(--color-error)/20 p-6">
-            <h2 className="text-heading text-(--color-error) mb-4 border-b border-(--color-border-default) pb-2">Issued Penalty</h2>
+            <h2 className="text-heading text-(--color-error) mb-4 border-b border-(--color-border-default) pb-2">{caseData.penalty.revokedAt ? 'Penalty revoked' : 'Issued Penalty'}</h2>
             <div className="space-y-3">
               <div><p className="text-label text-(--color-text-muted)">Penalty Type</p><p className="text-body font-medium text-(--color-error)">{caseData.penalty.type}</p></div>
               <div><p className="text-label text-(--color-text-muted)">Description</p><p className="text-body text-(--color-text-primary)">{caseData.penalty.description}</p></div>
               <div><p className="text-label text-(--color-text-muted)">Issued By</p><p className="text-body-sm text-(--color-text-secondary)">{caseData.penalty.issuedByName} (Head of Department)</p></div>
             </div>
             <div className="mt-6 flex gap-3">
-              <Button variant="secondary"><Download size={16} /> Download Notice PDF</Button>
+              {!caseData.penalty.revokedAt && <a href={`${api.API_BASE_URL}/api/cases/${caseData.id}/notice`} download className="inline-flex items-center gap-2 px-4 py-2 border border-(--color-border-default) rounded-[6px] text-body-sm"><Download size={16} /> Download notice (.txt)</a>}
               {canAppeal && (
                 <Button onClick={() => navigate(`/student/cases/${caseData.id}/appeal`)}><Scale size={16} /> File an Appeal</Button>
               )}

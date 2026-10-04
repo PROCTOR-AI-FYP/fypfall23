@@ -208,6 +208,17 @@ function EvidenceViewerInner({ kind, id, concealed, subjectLabel, className = ''
   const { media } = result;
   const subject = subjectLabel ? ` for ${subjectLabel}` : '';
 
+  if (media.clipStatus === 'snapshot_only') {
+    return <div className={className}>
+      {!media.snapshotUrl ? <StatePanel icon={<ImageOff size={20} />} tone="neutral" title="Snapshot unavailable" description="This evidence image is no longer available." />
+        : recovery === 'failed' ? <MediaFailedPanel noun="snapshot" onReload={manualMediaReload} />
+        : <ConcealableFrame concealed={concealed} refreshing={recovery === 'refreshing'} refreshingLabel="Refreshing evidence…">
+          <img key={mediaVersion} src={media.snapshotUrl} alt={`Detection snapshot${subject}`} onError={handleMediaError} className="w-full h-full object-contain" />
+        </ConcealableFrame>}
+      <p className="px-4 py-3 text-body-sm border-t border-(--color-border-default)">Detection snapshot from the local exam camera.</p>
+    </div>;
+  }
+
   // ── Pending upload ──
   if (media.clipStatus === 'pending_upload') {
     return (
@@ -389,7 +400,7 @@ function StatePanel({
   );
 }
 
-function MediaFailedPanel({ noun, onReload }: { noun: 'clip' | 'record image'; onReload: () => void }) {
+function MediaFailedPanel({ noun, onReload }: { noun: 'clip' | 'record image' | 'snapshot'; onReload: () => void }) {
   return (
     <StatePanel
       role="alert"

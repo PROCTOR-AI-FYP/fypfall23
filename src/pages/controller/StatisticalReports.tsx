@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { Download, Users, Briefcase, FileText } from 'lucide-react';
 import { StatCard, LoadingState } from '@/components/ui/DataDisplay';
@@ -7,12 +8,13 @@ import type { StatisticalReport } from '@/lib/types';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend } from 'recharts';
 
 export function StatisticalReports() {
+  const liveRevision = useLiveRevision();
   const [report, setReport] = useState<StatisticalReport | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     api.getStatisticalReports().then(r => { setReport(r.data); setLoading(false); });
-  }, []);
+  }, [liveRevision]);
 
   if (loading) return <LoadingState />;
   if (!report) return <div className="text-center py-16">Failed to load report</div>;

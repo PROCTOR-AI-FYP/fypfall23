@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DataTable, type Column } from '@/components/ui/DataTable';
@@ -9,6 +10,7 @@ import * as api from '@/lib/api';
 import { type Appeal, AppealStatus } from '@/lib/types';
 
 export function AppealReview() {
+  const liveRevision = useLiveRevision();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [appeals, setAppeals] = useState<Appeal[]>([]);
@@ -20,11 +22,11 @@ export function AppealReview() {
   const [resolved, setResolved] = useState(false);
 
   const load = () => {
-    setLoading(true);
+    if (!liveRevision) setLoading(true);
     api.getAppeals().then(r => { setAppeals(r.data); setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [liveRevision]);
 
   const handleResolve = async (status: AppealStatus.Accepted | AppealStatus.Rejected) => {
     if (!selectedAppeal || !reviewNote.trim()) return;
@@ -42,7 +44,7 @@ export function AppealReview() {
   const columns: Column<Appeal>[] = [
     { key: 'caseId', header: 'Case', render: (a) => (
       <button onClick={(e) => { e.stopPropagation(); navigate(`/hod/cases/${a.caseId}`); }}
-        className="text-(--color-accent-primary) hover:underline font-medium cursor-pointer">{a.caseId.replace('case-', 'AU-CS-INT-2026-')}</button>
+        className="text-(--color-accent-primary) hover:underline font-medium cursor-pointer">{a.caseReferenceNo ?? a.caseId}</button>
     )},
     { key: 'studentName', header: 'Student', sortable: true, render: (a) => (
       <div><span className="font-medium">{a.studentName}</span><br /><span className="text-label text-(--color-text-muted)">{a.studentRegNo}</span></div>

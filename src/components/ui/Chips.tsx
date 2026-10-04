@@ -39,7 +39,7 @@ export function BehaviorChip({ type }: { type: BehaviorType }) {
   const config = behaviorConfig[type];
   return (
     <span
-      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[2px] text-label font-medium whitespace-nowrap"
+      className="pa-chip inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[2px] text-label font-medium whitespace-nowrap"
       style={{ color: config.color, backgroundColor: config.bg }}
     >
       {config.icon}
@@ -77,7 +77,7 @@ export function StatusChip({ status }: { status: CaseStatus }) {
   const config = statusConfig[status];
   return (
     <span
-      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[2px] text-label font-medium whitespace-nowrap"
+      className="pa-chip inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[2px] text-label font-medium whitespace-nowrap"
       style={{ color: config.color, backgroundColor: config.bg }}
     >
       {config.icon}

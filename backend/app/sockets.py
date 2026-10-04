@@ -4,7 +4,8 @@ Clients authenticate with the same httpOnly session cookie as the REST API
 (the browser sends it on the handshake; JS never handles the token), and the
 account is re-checked against the users table exactly as deps does. They
 must join a session room explicitly; joining is authorized per session (a
-teacher only for sessions they invigilate). Students cannot connect.
+teacher only for sessions they invigilate). Students receive opaque change
+notifications only; they cannot join exam rooms or receive detection alerts.
 Cross-site WebSocket hijacking is blocked by the Origin check below
 (cors_allowed_origins), since cookies ride along on cross-origin handshakes.
 
@@ -68,9 +69,9 @@ async def connect(sid: str, environ: dict[str, Any], auth: Any) -> None:
             user = await resolve_session_user(conn, _session_token(environ))
     except HTTPException as exc:
         raise socketio.exceptions.ConnectionRefusedError("authentication required") from exc
-    if user.role == Role.STUDENT:
-        raise socketio.exceptions.ConnectionRefusedError("not permitted")
-    await sio.save_session(sid, {"user_id": user.user_id, "role": user.role.value})
+    await sio.save_session(sid, {"user_id": user.user_id, "role": user.role.value,'token':_session_token(environ)})
+    await sio.enter_room(sid, f'user:{user.user_id}')
+    await sio.enter_room(sid, 'sync:authenticated')
     if user.role == Role.TEACHER:
         await sio.enter_room(sid, invigilator_room(user.user_id))
 
@@ -85,12 +86,16 @@ async def join_session(sid: str, data: Any) -> dict[str, Any]:
 
     user = await sio.get_session(sid)
     async with acquire_connection() as conn:
+        try:
+            resolved = await resolve_session_user(conn,user['token'])
+        except HTTPException:
+            return {'ok':False,'error':'forbidden'}
         row = await conn.fetchrow("SELECT invigilator_id FROM exam_sessions WHERE id = $1", session_id)
     if row is None:
         return {"ok": False, "error": "not_found"}
 
     invigilator_id = str(row["invigilator_id"]) if row["invigilator_id"] is not None else None
-    if not can_access_session(role=Role(user["role"]), user_id=user["user_id"], invigilator_id=invigilator_id):
+    if not can_access_session(role=resolved.role, user_id=resolved.user_id, invigilator_id=invigilator_id):
         return {"ok": False, "error": "forbidden"}
 
     await sio.enter_room(sid, session_room(session_id))
@@ -105,6 +110,37 @@ async def emit_detection(session_id: str, invigilator_id: str | None, payload: d
     """
     rooms = [session_room(session_id)] + ([invigilator_room(invigilator_id)] if invigilator_id else [])
     try:
+        # A room subscription must not outlive its account or exam assignment.
+        recipients = {sid for room in rooms for sid,_ in sio.manager.get_participants('/',room)}
+        for sid in recipients:
+            try:
+                session = await sio.get_session(sid)
+                async with acquire_connection() as conn:
+                    current = await resolve_session_user(conn,session.get('token'))
+                    assigned = await conn.fetchval('SELECT invigilator_id FROM exam_sessions WHERE id=$1::uuid',session_id)
+                if not can_access_session(role=current.role,user_id=current.user_id,invigilator_id=str(assigned) if assigned else None):
+                    await sio.disconnect(sid)
+            except HTTPException:
+                await sio.disconnect(sid)
+            except KeyError:
+                # The connection disappeared during the permission check.
+                continue
         await sio.emit(EVENT_ALERT_NEW, payload, to=rooms)
     except (RedisError, OSError):
         logger.exception("socket.io emit failed for session %s", session_id)
+
+
+async def emit_sync() -> None:
+    """Opaque invalidation only. Each screen re-reads its authorized REST data.
+
+    No case identifier, person, score, or evidence is broadcast to this room.
+    """
+    try:
+        await sio.emit('sync:changed', {}, to='sync:authenticated')
+    except (RedisError,OSError):
+        logger.exception('live refresh notification failed')
+
+
+async def revoke_user_connections(user_id: str) -> None:
+    for sid,_ in list(sio.manager.get_participants('/',f'user:{user_id}')):
+        await sio.disconnect(sid)

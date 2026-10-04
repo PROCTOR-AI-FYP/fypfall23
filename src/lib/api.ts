@@ -15,14 +15,13 @@ import type {
 import {
   Role, CaseStatus, BehaviorType, PenaltyType, AppealStatus, SessionStatus,
 } from './types';
-import { mockCall } from './mock-db';
 
 // ── HTTP client ────────────────────────────
 // Every call sends the httpOnly session cookie (credentials: 'include') and,
 // on state-changing methods, the CSRF header the backend requires.
 
 // Empty string = same origin (e.g. a Vercel rewrite proxying /api to the API).
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000').replace(/\/$/, '');
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
 const CSRF_HEADER = 'X-ProctorAI-CSRF';
 // Dispatched on any 401 outside /api/auth so the auth context can drop a dead session.
 export const UNAUTHORIZED_EVENT = 'proctorai:unauthorized';
@@ -57,7 +56,7 @@ function detailMessage(payload: unknown, status: number): string {
   return status >= 500 ? 'The server ran into a problem. Please try again.' : `Request failed (${status}).`;
 }
 
-async function request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+export async function request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
   const url = new URL(`${API_BASE_URL}${path}`, window.location.origin);
   for (const [key, value] of Object.entries(options.query ?? {})) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
@@ -285,6 +284,7 @@ interface ApiPenalty {
   issued_by_name: string;
   notice_reference: string;
   created_at: string;
+  revoked_at: string | null;
 }
 
 function toPenalty(p: ApiPenalty): Penalty {
@@ -297,12 +297,14 @@ function toPenalty(p: ApiPenalty): Penalty {
     issuedByName: p.issued_by_name,
     noticeReference: p.notice_reference,
     createdAt: p.created_at,
+    revokedAt: p.revoked_at ?? undefined,
   };
 }
 
 interface ApiAppeal {
   id: string;
   case_id: string;
+  case_reference_no: string;
   student_id: string;
   student_name: string;
   student_reg_no: string;
@@ -320,6 +322,7 @@ function toAppeal(a: ApiAppeal): Appeal {
   return {
     id: a.id,
     caseId: a.case_id,
+    caseReferenceNo: a.case_reference_no,
     studentId: a.student_id,
     studentName: a.student_name,
     studentRegNo: a.student_reg_no,
@@ -366,6 +369,7 @@ interface ApiCase {
   classroom_name: string;
   seat_number: number;
   behaviour_types: string[];
+  per_signal: Record<string, number>;
   composite_score: number;
   status: string;
   detection_event_id: string | null;
@@ -380,6 +384,11 @@ interface ApiCase {
 }
 
 function toCase(c: ApiCase): Case {
+  const perSignal: Partial<Record<BehaviorType, number>> = {};
+  for (const [signal, score] of Object.entries(c.per_signal ?? {})) {
+    const type = BEHAVIOR_FROM_API[signal];
+    if (type) perSignal[type] = score;
+  }
   return {
     id: c.id,
     referenceNo: c.reference_no,
@@ -392,6 +401,7 @@ function toCase(c: ApiCase): Case {
     classroomName: c.classroom_name,
     seatNumber: c.seat_number,
     behaviourTypes: c.behaviour_types.map(b => BEHAVIOR_FROM_API[b]),
+    perSignal,
     compositeScore: c.composite_score,
     status: CASE_STATUS_FROM_API[c.status],
     detectionEventId: c.detection_event_id ?? '',
@@ -517,13 +527,13 @@ export async function getCurrentUser(): Promise<ApiResponse<User>> {
 }
 
 export async function logout(): Promise<void> {
+  closeLiveConnection();
   await request<void>('POST', '/api/auth/logout');
 }
 
 // ── Users API ──────────────────────────────
 
 export async function getUsers(filters?: { role?: Role; status?: string }): Promise<PaginatedResponse<User>> {
-  try {
   const users = await request<ApiUser[]>('GET', '/api/admin/users', {
     query: {
       role: filters?.role ? ROLE_TO_API[filters.role] : undefined,
@@ -531,13 +541,6 @@ export async function getUsers(filters?: { role?: Role; status?: string }): Prom
     },
   });
   return paginated(users.map(toUser));
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getUsers');
-      return mockCall('getUsers', [filters]);
-    }
-    throw e;
-  }
 }
 
 function userToApi(data: Partial<User>): Record<string, unknown> {
@@ -551,68 +554,28 @@ function userToApi(data: Partial<User>): Record<string, unknown> {
 }
 
 export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<ApiResponse<User>> {
-  try {
   const user = await request<ApiUser>('POST', '/api/admin/users', { body: userToApi(data) });
   return { data: toUser(user), message: 'User created. The account activates on first Google sign-in.' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for createUser');
-      return mockCall('createUser', [data]);
-    }
-    throw e;
-  }
 }
 
 export async function updateUser(id: string, data: Partial<User>): Promise<ApiResponse<User>> {
-  try {
   const user = await request<ApiUser>('PATCH', `/api/admin/users/${id}`, { body: userToApi(data) });
   return { data: toUser(user), message: 'User updated successfully' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for updateUser');
-      return mockCall('updateUser', [id, data]);
-    }
-    throw e;
-  }
 }
 
 export async function deleteUser(id: string): Promise<ApiResponse<null>> {
-  try {
   await request<void>('DELETE', `/api/admin/users/${id}`);
   return { data: null, message: 'User deleted successfully' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for deleteUser');
-      return mockCall('deleteUser', [id]);
-    }
-    throw e;
-  }
 }
 
 // ── Classrooms API ─────────────────────────
 
 export async function getClassrooms(): Promise<PaginatedResponse<Classroom>> {
-  try {
   return paginated((await request<ApiClassroom[]>('GET', '/api/classrooms')).map(toClassroom));
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getClassrooms');
-      return mockCall('getClassrooms', []);
-    }
-    throw e;
-  }
 }
 
 export async function getClassroom(id: string): Promise<ApiResponse<Classroom>> {
-  try {
   return { data: toClassroom(await request<ApiClassroom>('GET', `/api/classrooms/${id}`)) };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getClassroom');
-      return mockCall('getClassroom', [id]);
-    }
-    throw e;
-  }
 }
 
 function classroomToApi(data: Partial<Classroom>): Record<string, unknown> {
@@ -627,71 +590,31 @@ function classroomToApi(data: Partial<Classroom>): Record<string, unknown> {
 }
 
 export async function createClassroom(data: Omit<Classroom, 'id' | 'createdAt'>): Promise<ApiResponse<Classroom>> {
-  try {
   const classroom = await request<ApiClassroom>('POST', '/api/admin/classrooms', { body: classroomToApi(data) });
   return { data: toClassroom(classroom), message: 'Classroom created successfully' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for createClassroom');
-      return mockCall('createClassroom', [data]);
-    }
-    throw e;
-  }
 }
 
 export async function updateClassroom(id: string, data: Partial<Classroom>): Promise<ApiResponse<Classroom>> {
-  try {
   const classroom = await request<ApiClassroom>('PATCH', `/api/admin/classrooms/${id}`, { body: classroomToApi(data) });
   return { data: toClassroom(classroom), message: 'Classroom updated successfully' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for updateClassroom');
-      return mockCall('updateClassroom', [id, data]);
-    }
-    throw e;
-  }
 }
 
 export async function deleteClassroom(id: string): Promise<ApiResponse<null>> {
-  try {
   await request<void>('DELETE', `/api/admin/classrooms/${id}`);
   return { data: null, message: 'Classroom deleted successfully' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for deleteClassroom');
-      return mockCall('deleteClassroom', [id]);
-    }
-    throw e;
-  }
 }
 
 // ── Sessions API ───────────────────────────
 
 export async function getSessions(filters?: { status?: SessionStatus }): Promise<PaginatedResponse<ExamSession>> {
-  try {
   const sessions = await request<ApiSession[]>('GET', '/api/sessions', {
     query: { status: filters?.status ? SESSION_STATUS_TO_API[filters.status] : undefined },
   });
   return paginated(sessions.map(toSession));
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getSessions');
-      return mockCall('getSessions', [filters]);
-    }
-    throw e;
-  }
 }
 
 export async function getSession(id: string): Promise<ApiResponse<ExamSession>> {
-  try {
   return { data: toSession(await request<ApiSession>('GET', `/api/sessions/${id}`)) };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getSession');
-      return mockCall('getSession', [id]);
-    }
-    throw e;
-  }
 }
 
 /**
@@ -700,32 +623,16 @@ export async function getSession(id: string): Promise<ApiResponse<ExamSession>> 
  * A seat-map CSV, if given, is applied in the same step and must fully resolve.
  */
 export async function createSession(data: Partial<ExamSession>, seatMapFile?: File): Promise<ApiResponse<ExamSession>> {
-  try {
   const form = new FormData();
   form.set('classroom_id', data.classroomId ?? '');
   form.set('silent_mode', String(data.silentMode ?? false));
   if (seatMapFile) form.set('file', seatMapFile);
   const session = await request<ApiSession>('POST', '/api/sessions/start', { form });
   return { data: toSession(session), message: 'Session started' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for createSession');
-      return mockCall('createSession', [data, seatMapFile]);
-    }
-    throw e;
-  }
 }
 
 export async function endSession(id: string): Promise<ApiResponse<ExamSession>> {
-  try {
   return { data: toSession(await request<ApiSession>('POST', `/api/sessions/${id}/end`)), message: 'Session ended' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for endSession');
-      return mockCall('endSession', [id]);
-    }
-    throw e;
-  }
 }
 
 export interface SeatMapPreviewRow {
@@ -736,7 +643,6 @@ export interface SeatMapPreviewRow {
 
 /** Resolves a seat-map CSV against registered students; writes nothing. */
 export async function previewSeatMap(file: File): Promise<ApiResponse<SeatMapPreviewRow[]>> {
-  try {
   const form = new FormData();
   form.set('file', file);
   const result = await request<{ rows: { seat_number: number; student_reg_no: string; status: SeatMapPreviewRow['status'] }[] }>(
@@ -749,13 +655,6 @@ export async function previewSeatMap(file: File): Promise<ApiResponse<SeatMapPre
       status: r.status,
     })),
   };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for previewSeatMap');
-      return mockCall('previewSeatMap', [file]);
-    }
-    throw e;
-  }
 }
 
 // ── Cases API ──────────────────────────────
@@ -765,6 +664,7 @@ export async function getCases(filters?: {
   behaviorType?: BehaviorType;
   studentId?: string;
   courseCode?: string;
+  sessionId?: string;
 }): Promise<PaginatedResponse<Case>> {
   const cases = await request<ApiCase[]>('GET', '/api/cases', {
     query: {
@@ -772,21 +672,14 @@ export async function getCases(filters?: {
       behaviour_type: filters?.behaviorType ? BEHAVIOR_TO_API[filters.behaviorType] : undefined,
       student_id: filters?.studentId,
       course_code: filters?.courseCode,
+      session_id: filters?.sessionId,
     },
   });
   return paginated(cases.map(toCase));
 }
 
 export async function getCase(id: string): Promise<ApiResponse<Case>> {
-  try {
   return { data: toCase(await request<ApiCase>('GET', `/api/cases/${id}`)) };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getCase');
-      return mockCall('getCase', [id]);
-    }
-    throw e;
-  }
 }
 
 async function transition(id: string, toStatus: CaseStatus, note?: string): Promise<Case> {
@@ -796,53 +689,21 @@ async function transition(id: string, toStatus: CaseStatus, note?: string): Prom
 }
 
 export async function confirmCase(id: string, note?: string): Promise<ApiResponse<Case>> {
-  try {
   return { data: await transition(id, CaseStatus.Confirmed, note), message: 'Case confirmed' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for confirmCase');
-      return mockCall('confirmCase', [id, note]);
-    }
-    throw e;
-  }
 }
 
 export async function dismissCase(id: string, reason?: string): Promise<ApiResponse<Case>> {
-  try {
   return { data: await transition(id, CaseStatus.Dismissed, reason), message: 'Case dismissed' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for dismissCase');
-      return mockCall('dismissCase', [id, reason]);
-    }
-    throw e;
-  }
 }
 
 export async function escalateCase(id: string, reason?: string): Promise<ApiResponse<Case>> {
-  try {
   return { data: await transition(id, CaseStatus.Escalated, reason), message: 'Case escalated' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for escalateCase');
-      return mockCall('escalateCase', [id, reason]);
-    }
-    throw e;
-  }
 }
 
 /** The invigilator confirms a live alert as a case; it goes to the HOD with their note. */
 export async function createCaseFromDetection(detectionId: string, teacherNote: string): Promise<ApiResponse<Case>> {
-  try {
   const confirmed = await request<ApiCase>('POST', `/api/detections/${detectionId}/confirm`, { body: { teacher_note: teacherNote } });
   return { data: toCase(confirmed), message: 'Case forwarded to the Head of Department' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for createCaseFromDetection');
-      return mockCall('createCaseFromDetection', [detectionId, teacherNote]);
-    }
-    throw e;
-  }
 }
 
 // ── Penalties API ──────────────────────────
@@ -871,30 +732,14 @@ export async function issuePenalty(caseId: string, data: {
 // ── Appeals API ────────────────────────────
 
 export async function getAppeals(filters?: { status?: AppealStatus }): Promise<PaginatedResponse<Appeal>> {
-  try {
   const appeals = await request<ApiAppeal[]>('GET', '/api/appeals', {
     query: { status: filters?.status ? APPEAL_STATUS_TO_API[filters.status] : undefined },
   });
   return paginated(appeals.map(toAppeal));
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getAppeals');
-      return mockCall('getAppeals', [filters]);
-    }
-    throw e;
-  }
 }
 
 export async function getAppeal(id: string): Promise<ApiResponse<Appeal>> {
-  try {
   return { data: toAppeal(await request<ApiAppeal>('GET', `/api/appeals/${id}`)) };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getAppeal');
-      return mockCall('getAppeal', [id]);
-    }
-    throw e;
-  }
 }
 
 /** The student is identified by the session, never by the fields passed here. */
@@ -928,28 +773,12 @@ export async function resolveAppeal(appealId: string, data: {
 
 /** Alerts for one session, or, without a session, every alert the user may see. */
 export async function getDetectionEvents(sessionId?: string): Promise<PaginatedResponse<DetectionEvent>> {
-  try {
   const detections = await request<ApiDetection[]>('GET', '/api/detections', { query: { session_id: sessionId } });
   return paginated(detections.map(toDetection));
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getDetectionEvents');
-      return mockCall('getDetectionEvents', [sessionId]);
-    }
-    throw e;
-  }
 }
 
 export async function dismissDetection(id: string): Promise<ApiResponse<DetectionEvent>> {
-  try {
   return { data: toDetection(await request<ApiDetection>('POST', `/api/detections/${id}/dismiss`, { body: {} })) };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for dismissDetection');
-      return mockCall('dismissDetection', [id]);
-    }
-    throw e;
-  }
 }
 
 // ── Live alerts (Socket.IO) ────────────────
@@ -964,6 +793,42 @@ function getSocket(): Socket {
     socket = io(API_BASE_URL || window.location.origin, { withCredentials: true, transports: ['websocket', 'polling'] });
   }
   return socket;
+}
+
+export type CsvImportKind='student_roster'|'classroom_inventory'|'exam_schedule'|'invigilator_assignments';
+export type CsvImportFiles=Partial<Record<CsvImportKind,File>>;
+export interface CsvImportRow {kind:CsvImportKind;line:number;label:string;action:'create'|'skip'|'error';note:string;}
+export interface CsvImportPreview {rows:CsvImportRow[];counts:{create:number;skip:number;error:number};can_import:boolean;preview_hash:string;}
+export interface CsvImportResult {created:Record<CsvImportKind,number>;skipped:number;message:string;}
+function csvImportForm(files:CsvImportFiles,hash?:string) {
+  const form=new FormData();
+  for(const [kind,file] of Object.entries(files)) if(file) form.append(kind,file);
+  if(hash) form.append('preview_hash',hash);
+  return form;
+}
+export function previewCsvImports(files:CsvImportFiles) {return request<CsvImportPreview>('POST','/api/imports/preview',{form:csvImportForm(files)});}
+export function commitCsvImports(files:CsvImportFiles,hash:string) {return request<CsvImportResult>('POST','/api/imports/commit',{form:csvImportForm(files,hash)});}
+
+export function closeLiveConnection() {
+  socket?.disconnect();
+  socket=null;
+}
+
+export function subscribeToChanges(onChange: () => void): () => void {
+  const connection = getSocket();
+  connection.on('sync:changed', onChange);
+  connection.on('connect', onChange);
+  connection.on('disconnect', onChange);
+  const retry = window.setInterval(() => { if (!connection.connected && document.visibilityState === 'visible') onChange(); },5000);
+  const focus = () => onChange();
+  window.addEventListener('focus',focus);
+  return () => {
+    connection.off('sync:changed',onChange);
+    connection.off('connect',onChange);
+    connection.off('disconnect',onChange);
+    window.clearInterval(retry);
+    window.removeEventListener('focus',focus);
+  };
 }
 
 export function subscribeToAlerts(onAlert: (event: DetectionEvent) => void, options?: { sessionId?: string }): () => void {
@@ -996,47 +861,32 @@ interface ApiMedia {
 }
 
 function toMedia(m: ApiMedia): CaseMedia {
+  const mediaUrl = (url: string | null) => url?.startsWith('/') ? `${API_BASE_URL}${url}` : url;
   return {
     caseId: m.case_id,
     detectionId: m.detection_id,
     clipStatus: m.clip_status,
     clip: m.clip
       ? {
-          url: m.clip.url,
+          url: mediaUrl(m.clip.url)!,
           expiresInSeconds: m.clip.expires_in_seconds,
           durationSeconds: m.clip.duration_seconds,
           sizeBytes: m.clip.size_bytes,
           contentType: m.clip.content_type,
         }
       : null,
-    recordImageUrl: m.record_image_url,
-    snapshotUrl: m.snapshot_url,
+    recordImageUrl: mediaUrl(m.record_image_url),
+    snapshotUrl: mediaUrl(m.snapshot_url),
     clipDeletedAt: m.clip_deleted_at,
   };
 }
 
 export async function getCaseMedia(caseId: string): Promise<ApiResponse<CaseMedia>> {
-  try {
   return { data: toMedia(await request<ApiMedia>('GET', `/api/cases/${caseId}/media`)) };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getCaseMedia');
-      return mockCall('getCaseMedia', [caseId]);
-    }
-    throw e;
-  }
 }
 
 export async function getDetectionMedia(detectionId: string): Promise<ApiResponse<CaseMedia>> {
-  try {
   return { data: toMedia(await request<ApiMedia>('GET', `/api/detections/${detectionId}/media`)) };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getDetectionMedia');
-      return mockCall('getDetectionMedia', [detectionId]);
-    }
-    throw e;
-  }
 }
 
 // ── Thresholds API ─────────────────────────
@@ -1050,7 +900,6 @@ interface ApiThreshold {
 }
 
 export async function getThresholds(): Promise<ApiResponse<ThresholdConfig[]>> {
-  try {
   const thresholds = await request<ApiThreshold[]>('GET', '/api/admin/thresholds');
   return {
     data: thresholds.map(t => ({
@@ -1062,28 +911,13 @@ export async function getThresholds(): Promise<ApiResponse<ThresholdConfig[]>> {
       calibratedBy: t.updated_by_name ?? 'System defaults',
     })),
   };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getThresholds');
-      return mockCall('getThresholds', []);
-    }
-    throw e;
-  }
 }
 
 export async function updateThresholds(configs: ThresholdConfig[]): Promise<ApiResponse<ThresholdConfig[]>> {
-  try {
   await request<ApiThreshold[]>('PUT', '/api/admin/thresholds', {
     body: configs.map(c => ({ behaviour_type: BEHAVIOR_TO_API[c.behaviorType], sensitivity: c.sensitivity, weight: c.weight })),
   });
   return { ...(await getThresholds()), message: 'Thresholds updated' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for updateThresholds');
-      return mockCall('updateThresholds', [configs]);
-    }
-    throw e;
-  }
 }
 
 // ── Audit Log API ──────────────────────────
@@ -1137,7 +971,6 @@ interface ApiNotification {
 }
 
 export async function getNotifications(userId: string): Promise<PaginatedResponse<Notification>> {
-  try {
   const notifications = await request<ApiNotification[]>('GET', '/api/notifications');
   return paginated(notifications.map(n => ({
     id: n.id,
@@ -1150,53 +983,22 @@ export async function getNotifications(userId: string): Promise<PaginatedRespons
     read: n.read,
     createdAt: n.created_at,
   })));
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getNotifications');
-      return mockCall('getNotifications', [userId]);
-    }
-    throw e;
-  }
 }
 
 export async function markNotificationRead(id: string): Promise<ApiResponse<null>> {
-  try {
   await request<void>('POST', `/api/notifications/${id}/read`);
   return { data: null };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for markNotificationRead');
-      return mockCall('markNotificationRead', [id]);
-    }
-    throw e;
-  }
 }
 
 export async function markAllNotificationsRead(_userId: string): Promise<ApiResponse<null>> {
-  try {
   await request<void>('POST', '/api/notifications/read-all');
   return { data: null };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for markAllNotificationsRead');
-      return mockCall('markAllNotificationsRead', [_userId]);
-    }
-    throw e;
-  }
 }
 
 // ── Exam Schedule API ──────────────────────
 
 export async function getExamSchedule(): Promise<PaginatedResponse<ExamScheduleEntry>> {
-  try {
   return paginated((await request<ApiScheduleEntry[]>('GET', '/api/exam-schedule')).map(toScheduleEntry));
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getExamSchedule');
-      return mockCall('getExamSchedule', []);
-    }
-    throw e;
-  }
 }
 
 function examToApi(data: Partial<ExamScheduleEntry>): Record<string, unknown> {
@@ -1212,68 +1014,28 @@ function examToApi(data: Partial<ExamScheduleEntry>): Record<string, unknown> {
 }
 
 export async function createExam(data: Omit<ExamScheduleEntry, 'id'>): Promise<ApiResponse<ExamScheduleEntry>> {
-  try {
   const exam = toScheduleEntry(await request<ApiScheduleEntry>('POST', '/api/exam-schedule', { body: examToApi(data) }));
   return { data: exam, message: exam.hasConflict ? 'Exam created with conflicts' : 'Exam created successfully' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for createExam');
-      return mockCall('createExam', [data]);
-    }
-    throw e;
-  }
 }
 
 export async function updateExam(id: string, data: Partial<ExamScheduleEntry>): Promise<ApiResponse<ExamScheduleEntry>> {
-  try {
   return { data: toScheduleEntry(await request<ApiScheduleEntry>('PATCH', `/api/exam-schedule/${id}`, { body: examToApi(data) })), message: 'Exam updated' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for updateExam');
-      return mockCall('updateExam', [id, data]);
-    }
-    throw e;
-  }
 }
 
 export async function deleteExam(id: string): Promise<ApiResponse<null>> {
-  try {
   await request<void>('DELETE', `/api/exam-schedule/${id}`);
   return { data: null, message: 'Exam cancelled' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for deleteExam');
-      return mockCall('deleteExam', [id]);
-    }
-    throw e;
-  }
 }
 
 // ── Invigilator Assignments API ────────────
 
 export async function getAssignments(): Promise<PaginatedResponse<InvigilatorAssignment>> {
-  try {
   return paginated((await request<ApiAssignment[]>('GET', '/api/invigilator-assignments')).map(toAssignment));
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getAssignments');
-      return mockCall('getAssignments', []);
-    }
-    throw e;
-  }
 }
 
 export async function assignInvigilator(examId: string, teacherId: string): Promise<ApiResponse<InvigilatorAssignment>> {
-  try {
   const assignment = await request<ApiAssignment>('POST', `/api/exam-schedule/${examId}/invigilator`, { body: { teacher_id: teacherId } });
   return { data: toAssignment(assignment), message: 'Invigilator assigned' };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for assignInvigilator');
-      return mockCall('assignInvigilator', [examId, teacherId]);
-    }
-    throw e;
-  }
 }
 
 // ── Statistical Reports API ────────────────
@@ -1290,7 +1052,6 @@ interface ApiStatistics {
 }
 
 export async function getStatisticalReports(): Promise<ApiResponse<StatisticalReport>> {
-  try {
   const s = await request<ApiStatistics>('GET', '/api/reports/statistics');
   return {
     data: {
@@ -1304,11 +1065,4 @@ export async function getStatisticalReports(): Promise<ApiResponse<StatisticalRe
       averageResolutionDays: s.average_resolution_days,
     },
   };
-  } catch (e: any) {
-    if (e.code === 'NETWORK_ERROR') {
-      console.warn('Falling back to mock-db for getStatisticalReports');
-      return mockCall('getStatisticalReports', []);
-    }
-    throw e;
-  }
 }

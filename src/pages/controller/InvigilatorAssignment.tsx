@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { DataTable, type Column } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -8,6 +9,7 @@ import type { InvigilatorAssignment, ExamScheduleEntry, User } from '@/lib/types
 import { Role } from '@/lib/types';
 
 export function InvigilatorAssignment() {
+  const liveRevision = useLiveRevision();
   const [assignments, setAssignments] = useState<InvigilatorAssignment[]>([]);
   const [exams, setExams] = useState<ExamScheduleEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -18,7 +20,7 @@ export function InvigilatorAssignment() {
   const [teachers, setTeachers] = useState<User[]>([]);
 
   const load = () => {
-    setLoading(true);
+    if (!liveRevision) setLoading(true);
     Promise.all([api.getAssignments(), api.getExamSchedule(), api.getUsers({ role: Role.Teacher, status: 'Active' })]).then(([aRes, eRes, tRes]) => {
       setAssignments(aRes.data);
       setExams(eRes.data.filter(e => !e.invigilatorId)); // Only unassigned exams
@@ -26,7 +28,7 @@ export function InvigilatorAssignment() {
       setLoading(false);
     });
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [liveRevision]);
 
   const handleAssign = async () => {
     if (!selectedExam || !selectedTeacher) return;

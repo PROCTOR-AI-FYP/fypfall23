@@ -1,16 +1,23 @@
-# Local website: live phone and book detection
+# Archived standalone camera milestone
 
-This connects the currently active `src/App.tsx` Live Alert Inbox to the local
-SQLite backend (`backend.main:app`) and the corrected detector. The separate
-authenticated platform in `backend/app/` is unchanged.
+The default website now runs the authenticated platform. See [LOCAL_PLATFORM.md](LOCAL_PLATFORM.md).
+The following describes the earlier SQLite camera milestone in `backend.main:app`;
+its backend and regression tests remain available, but it is not the default React entry point.
+
+The same camera now also runs calibrated head-pose monitoring. Start monitoring,
+then click **Set neutral pose** and hold the normal exam posture for two seconds.
+Angles and sustained-motion warnings appear below the video. The existing
+head signal weight (0.65) is preserved; head alone remains below the 0.75 review
+threshold. See `../ai-engine/HEAD_POSE_VALIDATION.md` for conventions, tests and
+the single-student-view limitation.
 
 From the project root in PowerShell:
 
 ```powershell
-.\scripts\start-local.ps1
+.\venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8002
 ```
 
-Open **http://127.0.0.1:5173/** and click **Start monitoring**. **Stop monitoring**
+The former demo UI is preserved in the checkpoint ZIP; the current website uses real role-based sessions. **Stop monitoring**
 releases the webcam. Close other camera applications, including the standalone
 `phone_detector.py` window, before starting the website camera.
 
@@ -51,11 +58,12 @@ score** is the weighted composite policy score. They are different values.
 ## Validation
 
 ```powershell
-.\venv\Scripts\python.exe -m pytest ai-engine/test_phone_detector.py ai-engine/test_composite_scorer.py ai-engine/test_grounding_detector.py ai-engine/test_realtime.py ai-engine/test_web_integration.py -q -p no:cacheprovider
+.\venv\Scripts\python.exe -m pytest ai-engine/test_phone_detector.py ai-engine/test_composite_scorer.py ai-engine/test_grounding_detector.py ai-engine/test_realtime.py ai-engine/test_head_pose.py ai-engine/test_web_integration.py -q -p no:cacheprovider
 npm run build
 ```
 
-66 tests passed, and the production frontend build passed. The web tests use a
+102 tests passed after adding calibrated head pose, and the production frontend
+build passed. The web tests use a
 disposable SQLite database and fake capture to verify policy, storage, delivery,
 idempotent Start, Stop/release, failure reporting and review persistence. They
 do not invoke the destructive Postgres/Redis test suite.

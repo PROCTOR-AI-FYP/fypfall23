@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { Download } from 'lucide-react';
 import { DataTable, type Column } from '@/components/ui/DataTable';
@@ -7,19 +8,20 @@ import * as api from '@/lib/api';
 import type { AuditLogEntry } from '@/lib/types';
 
 export function AuditLogViewer() {
+  const liveRevision = useLiveRevision();
   const [entries, setEntries] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [actionFilter, setActionFilter] = useState('');
 
   const load = () => {
-    setLoading(true); setError('');
+    if (!liveRevision) setLoading(true); setError('');
     const filters = actionFilter ? { action: actionFilter } : undefined;
     api.getAuditLog(filters).then(r => { setEntries(r.data); setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
   };
 
-  useEffect(() => { load(); }, [actionFilter]);
+  useEffect(() => { load(); }, [actionFilter, liveRevision]);
 
   const exportCsv = () => {
     const header = 'Timestamp,User,Role,Action,Target,Details,IP\n';

@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, EyeOff, Eye, Clock } from 'lucide-react';
@@ -10,6 +11,7 @@ import * as api from '@/lib/api';
 import { type Case, CaseStatus } from '@/lib/types';
 
 export function CaseDetail() {
+  const liveRevision = useLiveRevision();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [caseData, setCaseData] = useState<Case | null>(null);
@@ -23,7 +25,7 @@ export function CaseDetail() {
     if (!id) return;
     api.getCase(id).then(r => { setCaseData(r.data); setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
-  }, [id]);
+  }, [id, liveRevision]);
 
   const handleDismiss = async () => {
     if (!id) return;
@@ -85,7 +87,9 @@ export function CaseDetail() {
               {caseData.behaviourTypes.map(b => (
                 <div key={b} className="flex items-center gap-4">
                   <div className="w-40 shrink-0"><BehaviorChip type={b} /></div>
-                  <div className="flex-1"><ConfidenceBar value={caseData.compositeScore} /></div>
+                  <div className="flex-1">{caseData.perSignal?.[b] !== undefined
+                    ? <ConfidenceBar value={caseData.perSignal[b]!} />
+                    : <span className="text-body-sm text-(--color-text-muted)">Unavailable</span>}</div>
                 </div>
               ))}
               <div className="pt-3 border-t border-(--color-border-default) flex items-center gap-4">
@@ -139,7 +143,7 @@ export function CaseDetail() {
           {/* Penalty info */}
           {caseData.penalty && (
             <div className="bg-(--color-bg-surface) rounded-[6px] border border-(--color-error)/20 p-5">
-              <h2 className="text-heading text-(--color-error) mb-3">Penalty issued</h2>
+              <h2 className="text-heading text-(--color-error) mb-3">{caseData.penalty.revokedAt ? 'Penalty revoked' : 'Penalty issued'}</h2>
               <dl className="space-y-2 text-body-sm">
                 <div className="flex justify-between"><dt className="text-(--color-text-muted)">Type</dt><dd className="font-medium text-(--color-error)">{caseData.penalty.type}</dd></div>
                 <div className="flex justify-between"><dt className="text-(--color-text-muted)">Reference</dt><dd className="font-medium">{caseData.penalty.noticeReference}</dd></div>
@@ -155,7 +159,7 @@ export function CaseDetail() {
               <h2 className="text-heading text-(--color-behavior-gaze) mb-2">Appeal {caseData.appeal.status.toLowerCase()}</h2>
               <p className="text-body-sm text-(--color-text-secondary)">{caseData.appeal.statement}</p>
               {caseData.appeal.status === 'Open' && (
-                <Button variant="secondary" size="sm" className="mt-3" onClick={() => navigate(`/hod/appeals/${caseData.appeal!.id}`)}>
+                <Button variant="secondary" size="sm" className="mt-3" onClick={() => navigate('/hod/appeals')}>
                   Review appeal
                 </Button>
               )}

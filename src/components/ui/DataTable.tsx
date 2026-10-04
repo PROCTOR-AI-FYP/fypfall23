@@ -78,7 +78,7 @@ export function DataTable<T>({
   // Loading state
   if (loading) {
     return (
-      <div className="bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default)">
+      <div className="pa-data-table bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default)">
         <div className="p-8 flex flex-col items-center gap-3">
           <div className="h-6 w-6 border-2 border-(--color-accent-primary) border-t-transparent rounded-full animate-spin" />
           <p className="text-body-sm text-(--color-text-muted)">Loading data...</p>
@@ -90,7 +90,7 @@ export function DataTable<T>({
   // Error state
   if (error) {
     return (
-      <div className="bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default)">
+      <div className="pa-data-table bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default)">
         <div className="p-8 flex flex-col items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-(--color-error-subtle) flex items-center justify-center">
             <span className="text-(--color-error) text-lg">!</span>
@@ -111,7 +111,7 @@ export function DataTable<T>({
   }
 
   return (
-    <div className="bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default)">
+    <div className="pa-data-table bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default)">
       {/* Toolbar */}
       {(searchable || filters) && (
         <div className="px-4 py-3 border-b border-(--color-border-default) flex flex-wrap items-center gap-3">
@@ -123,6 +123,7 @@ export function DataTable<T>({
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 placeholder={searchPlaceholder}
+                aria-label={searchPlaceholder}
                 className="w-full pl-9 pr-3 py-2 text-body-sm bg-(--color-bg-surface-raised) border border-(--color-border-default) rounded-[6px] text-(--color-text-primary) placeholder:text-(--color-text-muted) focus:outline-none focus:border-(--color-border-focus)"
               />
             </div>
@@ -145,14 +146,14 @@ export function DataTable<T>({
                     ${col.sortable ? 'cursor-pointer select-none hover:text-(--color-text-primary)' : ''}
                   `}
                   style={col.width ? { width: col.width } : undefined}
-                  onClick={() => col.sortable && handleSort(col.key)}
+                  aria-sort={col.sortable ? sortKey === col.key ? sortDir === 'asc' ? 'ascending' : 'descending' : 'none' : undefined}
                 >
-                  <span className="inline-flex items-center gap-1">
+                  {col.sortable ? <button onClick={() => handleSort(col.key)} className="inline-flex items-center gap-1 cursor-pointer" type="button">
                     {col.header}
                     {col.sortable && sortKey === col.key && (
                       sortDir === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />
                     )}
-                  </span>
+                  </button> : col.header}
                 </th>
               ))}
             </tr>
@@ -170,6 +171,13 @@ export function DataTable<T>({
                 <tr
                   key={rowKey(row)}
                   onClick={() => onRowClick?.(row)}
+                  tabIndex={onRowClick ? 0 : undefined}
+                  onKeyDown={event => {
+                    if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+                      event.preventDefault();
+                      onRowClick?.(row);
+                    }
+                  }}
                   className={`
                     border-b border-(--color-border-default) last:border-b-0
                     transition-colors

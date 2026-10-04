@@ -22,4 +22,21 @@ export interface ObjectMonitorStatus {
   checking: string[];
   error: string | null;
   alert_error: string | null;
+  head_error?: string | null;
+  head_pose?: HeadPoseStatus | null;
+}
+
+export interface HeadPoseStatus {
+  state: string;
+  calibrated: boolean;
+  calibrating: boolean;
+  calibration_progress: number;
+  yaw: number | null;
+  pitch: number | null;
+  roll: number | null;
+  violating: boolean;
+  sustained: boolean;
+  duration: number;
+  processing_ms: number;
+  thresholds: { yaw: number; pitch: number; seconds: number };
 }

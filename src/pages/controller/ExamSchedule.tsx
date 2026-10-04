@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { DataTable, type Column } from '@/components/ui/DataTable';
@@ -7,8 +8,10 @@ import { FormField, Input, Select } from '@/components/ui/FormElements';
 import * as api from '@/lib/api';
 import type { Classroom, ExamScheduleEntry } from '@/lib/types';
 import { SessionStatus } from '@/lib/types';
+import { SetupToolkit } from '@/components/setup/SetupToolkit';
 
 export function ExamSchedule() {
+  const liveRevision = useLiveRevision();
   const [exams, setExams] = useState<ExamScheduleEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -18,11 +21,11 @@ export function ExamSchedule() {
   const [classrooms, setClassrooms] = useState<Classroom[]>([]);
 
   const load = () => {
-    setLoading(true);
+    if (!liveRevision) setLoading(true);
     setError('');
     api.getExamSchedule().then(r => { setExams(r.data); setLoading(false); }).catch(e => { setError(e.message); setLoading(false); });
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [liveRevision]);
   useEffect(() => { api.getClassrooms().then(r => setClassrooms(r.data)).catch(e => setError(e.message)); }, []);
 
   const handleCreate = async () => {
@@ -60,6 +63,7 @@ export function ExamSchedule() {
         </Button>
       </div>
 
+      <div className="mb-5"><SetupToolkit/></div>
       <DataTable columns={columns} data={exams} loading={loading} error={error} onRetry={load} searchable rowKey={e=>e.id} />
 
       <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title="Schedule Exam"

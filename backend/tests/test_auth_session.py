@@ -133,7 +133,7 @@ async def test_staff_account_activates_on_first_sign_in_then_signs_in(
 ) -> None:
     sub = str(uuid.uuid4())
     # Google returns whatever casing the account has; matching is case-insensitive.
-    first = await _exchange(client, make_token(signing_key, email="M.Bilal@Students.AU.edu.pk", sub=sub))
+    first = await _exchange(client, make_token(signing_key, email="M.Bilal@AU.edu.pk", sub=sub))
     assert first.status_code == 200, first.text
     assert first.json()["role"] == "teacher" and first.json()["activated"] is True
     assert str(await admin_conn.fetchval("SELECT supabase_user_id FROM users WHERE email = $1", TEACHER_EMAIL)) == sub
@@ -186,7 +186,7 @@ async def test_other_domains_and_disabled_accounts_are_refused(
     client: AsyncClient, admin_conn: asyncpg.Connection, signing_key: ec.EllipticCurvePrivateKey
 ) -> None:
     # The `hd` hint is client-side only; this is the real check.
-    for email in ("245003@gmail.com", "245003@students.au.edu.pk.evil.com", "m.bilal@au.edu.pk"):
+    for email in ("245003@gmail.com", "245003@students.au.edu.pk.evil.com", "m.bilal@other-university.edu.pk"):
         response = await _exchange(client, make_token(signing_key, email=email))
         assert response.status_code == 403, email
     await admin_conn.execute("UPDATE users SET status = 'disabled' WHERE email = $1", TEACHER_EMAIL)

@@ -20,6 +20,7 @@ from uuid import UUID
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import FileResponse
 
 from app.audit import ACTION_CLIP_STORED, ACTION_MEDIA_VIEWED, record_audit
 from app.config import settings
@@ -160,13 +161,16 @@ async def _media_response(
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found.")
 
-    storage = _storage_or_503()
     if row["clip_purged_at"] is not None:
         clip_status = ClipStatus.DELETED_AFTER_REVIEW
     elif row["clip_path"] is not None:
         clip_status = ClipStatus.AVAILABLE
     else:
         clip_status = ClipStatus.PENDING_UPLOAD
+
+    from app.services.camera import local_snapshot_path
+    if clip_status == ClipStatus.PENDING_UPLOAD and row['snapshot_path'] and local_snapshot_path(row['snapshot_path']) is not None:
+        clip_status = ClipStatus.SNAPSHOT_ONLY
 
     images_kept = row["snapshot_purged_at"] is None
     wanted = {
@@ -175,8 +179,14 @@ async def _media_response(
         "snapshot": row["snapshot_path"] if images_kept else None,
     }
     ttl = settings.media_url_ttl_seconds
+    async def evidence_url(path):
+        if not path:
+            return None
+        if local_snapshot_path(path) is not None:
+            return f"/api/detections/{row['detection_id']}/snapshot"
+        return await _storage_or_503().signed_url(path,ttl)
     try:
-        signed = await asyncio.gather(*(storage.signed_url(path, ttl) if path else _none() for path in wanted.values()))
+        signed = await asyncio.gather(*(evidence_url(path) for path in wanted.values()))
     except httpx.HTTPError as exc:
         logger.error("signing evidence URLs failed: %s", exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Evidence storage is unavailable.") from exc
@@ -235,3 +245,16 @@ async def get_detection_media(
 ) -> CaseMediaOut:
     row = await conn.fetchrow(f"{MEDIA_SELECT} WHERE de.id = $1", detection_id)
     return await _media_response(row, current_user, request, conn)
+
+
+@router.get('/detections/{detection_id}/snapshot')
+async def local_snapshot(detection_id:UUID,current_user:CurrentUser=Depends(require_evidence_reviewer),conn:asyncpg.Connection=Depends(get_db)):
+    from app.services.camera import local_snapshot_path
+    row = await conn.fetchrow(f'{MEDIA_SELECT} WHERE de.id = $1',detection_id)
+    invigilator_id = str(row['invigilator_id']) if row and row['invigilator_id'] else None
+    if row is None or not can_review_evidence(role=current_user.role,user_id=current_user.user_id,invigilator_id=invigilator_id):
+        raise HTTPException(404,'Evidence not found.')
+    path = local_snapshot_path(row['snapshot_path']) if row['snapshot_path'] and row['snapshot_purged_at'] is None else None
+    if path is None or not path.is_file():
+        raise HTTPException(404,'Evidence not found.')
+    return FileResponse(path,media_type='image/jpeg',headers={'Cache-Control':'no-store'})

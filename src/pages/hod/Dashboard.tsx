@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { Shield, FileText, Scale, AlertTriangle } from 'lucide-react';
 import { StatCard } from '@/components/ui/DataDisplay';
@@ -8,6 +9,7 @@ import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, R
 const TREND_DAYS = 8;
 
 export function HodDashboard() {
+  const liveRevision = useLiveRevision();
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ pending: 0, confirmed: 0, appeals: 0, dismissed: 0 });
   const [cases, setCases] = useState<Case[]>([]);
@@ -24,7 +26,7 @@ export function HodDashboard() {
       });
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, []);
+  }, [liveRevision]);
 
   const countBehavior = (type: BehaviorType) => cases.filter(c => c.behaviourTypes.includes(type)).length;
 

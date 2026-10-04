@@ -75,6 +75,10 @@ async def ingest_frame(body: FrameRequest, conn: asyncpg.Connection = Depends(ge
 
 @router.post("/detections", response_model=CaseOut, status_code=status.HTTP_201_CREATED)
 async def record_detection(body: DetectionEventIn, conn: asyncpg.Connection = Depends(get_db)) -> CaseOut:
+    return await save_detection(body, conn)
+
+
+async def save_detection(body: DetectionEventIn, conn: asyncpg.Connection, *, expected_student_id: str | None = None) -> CaseOut:
     session_id = str(body.session_id)
     meta = await _require_active_session(conn, session_id)
 
@@ -96,6 +100,13 @@ async def record_detection(body: DetectionEventIn, conn: asyncpg.Connection = De
     behaviour_values = [b.value for b in body.behaviour_types]
     per_signal = {signal.value: score for signal, score in body.per_signal.items()}
     async with conn.transaction():
+        if expected_student_id is not None:
+            active = await conn.fetchval('SELECT status FROM exam_sessions WHERE id=$1 FOR SHARE', body.session_id)
+            mapped = await conn.fetchrow('''SELECT sa.student_id,u.status,u.deleted_at FROM seat_assignments sa
+                JOIN users u ON u.id=sa.student_id WHERE sa.session_id=$1 AND sa.seat_number=$2
+                FOR SHARE OF sa,u''',body.session_id,body.seat_number)
+            if active != 'in_progress' or mapped is None or str(mapped['student_id']) != expected_student_id or mapped['status'] != 'active' or mapped['deleted_at'] is not None:
+                raise HTTPException(409,'The exam or monitored student assignment changed. Restart camera monitoring.')
         try:
             async with conn.transaction():
                 detection_id = await conn.fetchval(

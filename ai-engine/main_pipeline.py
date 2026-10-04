@@ -39,6 +39,7 @@ def main():
     frames, fps, started = 0, 0.0, time.monotonic()
     title = 'ProctorAI real-time pipeline - q to quit'
     print('Live pipeline starting. Press q to quit.', flush=True)
+    print('Press c in your normal exam posture to calibrate head pose.', flush=True)
     try:
         while True:
             ok, frame = cap.read()
@@ -57,7 +58,7 @@ def main():
                 raise RuntimeError(objects.error)
             if now - last_pose >= 1 / 6:
                 last_pose = now
-                pose = head.process_frame(frame)
+                pose = head.process_frame(frame, now)
                 signals = {event.type for event in events}
                 if pose:
                     signals.add(pose.type)
@@ -76,12 +77,16 @@ def main():
             status = f'Live: {fps:.0f} fps | AI check: {objects.last_inference_seconds:.2f}s' if objects.ready else 'Live camera | Loading object AI...'
             cv2.putText(annotated, status, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, .6, (0, 255, 0), 2)
             cv2.imshow(title, annotated)
-            if cv2.waitKey(1) & 0xFF == ord('q') or cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE) < 1:
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('c'):
+                head.begin_calibration()
+            if key == ord('q') or cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE) < 1:
                 break
     finally:
         cap.release()
         cv2.destroyAllWindows()
         objects.close()
+        head.close()
         http.shutdown(wait=False, cancel_futures=True)
 
 

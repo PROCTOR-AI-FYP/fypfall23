@@ -15,10 +15,10 @@ from app.csrf import CSRF_HEADER
 from app.models import Role
 from app.security import create_access_token
 
-TEACHER_EMAIL = "m.bilal@students.au.edu.pk"
-HOD_EMAIL = "hod.cs@students.au.edu.pk"
-ADMIN_EMAIL = "admin.registrar@students.au.edu.pk"
-CONTROLLER_EMAIL = "controller.exams@students.au.edu.pk"
+TEACHER_EMAIL = "m.bilal@au.edu.pk"
+HOD_EMAIL = "hod.cs@au.edu.pk"
+ADMIN_EMAIL = "admin.registrar@au.edu.pk"
+CONTROLLER_EMAIL = "controller.exams@au.edu.pk"
 STUDENT_A_EMAIL = "232475@students.au.edu.pk"
 STUDENT_B_EMAIL = "232490@students.au.edu.pk"
 SEEDED_SESSION_ID = "00000000-0000-0000-0000-000000000001"

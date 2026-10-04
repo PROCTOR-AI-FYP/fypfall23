@@ -225,6 +225,14 @@ async def stop_object_monitor():
     return await asyncio.to_thread(monitor.stop)
 
 
+@fastapi_app.post('/object-monitor/head-pose/calibrate', status_code=202)
+def calibrate_head_pose():
+    try:
+        return monitor.calibrate_head()
+    except RuntimeError as exc:
+        raise HTTPException(409,str(exc)) from exc
+
+
 @fastapi_app.get('/object-monitor/feed')
 async def object_monitor_feed(run_id: int):
     state = monitor.status()

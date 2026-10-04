@@ -20,6 +20,28 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from backend.object_monitor import ObjectMonitor
 from phone_detector import BOOK, PHONE, DetectionEvent
+from head_pose_detector import HEAD
+
+
+class HeadRuntime:
+    signal = None
+    calibrated = False
+    closed = False
+
+    def begin_calibration(self):
+        self.calibrated=True
+
+    def process_frame(self,frame,timestamp):
+        return self.signal
+
+    def status(self):
+        return dict(state='neutral',calibrated=self.calibrated,calibrating=False)
+
+    def annotate_frame(self,frame):
+        return frame
+
+    def close(self):
+        self.closed=True
 
 
 class Camera:
@@ -69,7 +91,9 @@ def demo(tmp_path,monkeypatch):
     spec.loader.exec_module(module)
     module.sio.emit = AsyncMock()
     camera, runtime = Camera(), Runtime([PHONE,BOOK])
-    module.monitor = ObjectMonitor(module.camera_alert_sink, camera=lambda:camera, runtime=lambda:runtime)
+    head=HeadRuntime()
+    module.test_head=head
+    module.monitor = ObjectMonitor(module.camera_alert_sink, camera=lambda:camera, runtime=lambda:runtime,head=lambda:head)
     with TestClient(module.app) as client:
         yield module,client,camera,runtime
     module.engine.dispose()
@@ -110,6 +134,7 @@ def test_confirmed_objects_create_saved_cases_and_socket_updates(demo,signals,ki
     stopped=client.post('/object-monitor/stop')
     assert stopped.status_code==200 and not stopped.json()['running']
     assert camera.released and runtime.closed
+    assert module.test_head.closed
     assert module.monitor.latest_frame()[1] is None
 
 
@@ -153,3 +178,28 @@ def test_case_review_returns_saved_status_and_missing_case_error(demo):
     assert client.post(f'/cases/{case["id"]}/confirm').status_code==200
     assert client.get('/cases').json()[0]['status']=='confirmed'
     assert client.post('/cases/999999/dismiss').status_code==404
+
+
+def test_head_calibration_requires_running_camera_and_updates_status(demo):
+    module,client,_,_=demo
+    assert client.post('/object-monitor/head-pose/calibrate').status_code==409
+    client.post('/object-monitor/start')
+    wait_for(lambda:client.get('/object-monitor/status').json()['head_pose'] is not None)
+    assert client.post('/object-monitor/head-pose/calibrate').status_code==202
+    wait_for(lambda:client.get('/object-monitor/status').json()['head_pose']['calibrated'])
+    assert module.test_head.calibrated
+    client.post('/object-monitor/stop')
+    assert client.get('/object-monitor/status').json()['head_pose'] is None
+
+
+def test_head_signal_keeps_existing_weight_and_combines_with_phone(demo):
+    module,client,_,runtime=demo
+    runtime.signals=[]
+    module.test_head.signal=DetectionEvent(HEAD,.65,time.time(),(0,0,1,1),'head',1)
+    client.post('/object-monitor/start')
+    time.sleep(3.2)
+    assert client.get('/cases').json()==[]  # head alone remains below .75 policy
+    runtime.signals=[PHONE]
+    wait_for(lambda:len(client.get('/cases').json())==1)
+    case=client.get('/cases').json()[0]
+    assert case['type']==HEAD+'+'+PHONE and case['confidence']==.9

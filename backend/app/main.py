@@ -35,6 +35,8 @@ from app.routers import (
     reports,
     schedule,
     sessions,
+    camera,
+    imports,
 )
 from app.services.mqtt import mqtt_service
 from app.services.media import ffmpeg_available
@@ -63,6 +65,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.warning("ffmpeg not found: evidence clip uploads will be rejected")
         yield
     finally:
+        from app.services.camera import platform_camera
+        await platform_camera.stop()
         for task in background_tasks:
             task.cancel()
         await asyncio.gather(*background_tasks, return_exceptions=True)
@@ -71,11 +75,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await close_redis()
 
 
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 
 app = FastAPI(
     title="ProctorAI Backend",
@@ -84,11 +83,6 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None if settings.is_production else "/openapi.json",
 )
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request, exc):
-    print(f"OMG 422: {exc.errors()} body: {exc.body}")
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 def cors_options(origins: list[str]) -> dict[str, Any]:
     # The session is an httpOnly cookie, so credentials must be allowed; that
@@ -122,6 +116,19 @@ app.include_router(reports.router)
 app.include_router(internal.router)
 app.include_router(media.internal_router)
 app.include_router(media.router)
+app.include_router(camera.router)
+app.include_router(imports.router)
+
+
+@app.middleware('http')
+async def publish_committed_changes(request,call_next):
+    response = await call_next(request)
+    if request.method in {'POST','PUT','PATCH','DELETE'} and response.status_code < 400 and request.url.path.startswith(('/api/','/internal/')):
+        from app.sockets import emit_sync,revoke_user_connections
+        if request.method in {'PATCH','DELETE'} and request.url.path.startswith('/api/admin/users/'):
+            await revoke_user_connections(request.url.path.rsplit('/',1)[-1])
+        await emit_sync()
+    return response
 
 
 @app.get("/healthz", include_in_schema=False)

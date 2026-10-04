@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
 import { type User, type AuthState, Role } from './types';
-import { exchangeGoogleSession, getCurrentUser, logout as apiLogout, UNAUTHORIZED_EVENT } from './api';
+import { exchangeGoogleSession, getCurrentUser, logout as apiLogout, UNAUTHORIZED_EVENT,closeLiveConnection } from './api';
 import { startGoogleSignIn, completeGoogleSignIn } from './supabase';
 import { LoadingState } from '@/components/ui/DataDisplay';
 
@@ -12,6 +12,7 @@ interface AuthContextValue extends AuthState {
   // (e.g. a non-university account or an unprovisioned staff email).
   completeSignIn: (code: string) => Promise<User>;
   logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -36,7 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const dropSession = () => setState({ user: null, isAuthenticated: false, isLoading: false });
+    const dropSession = () => { closeLiveConnection(); setState({ user: null, isAuthenticated: false, isLoading: false }); };
     window.addEventListener(UNAUTHORIZED_EVENT, dropSession);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, dropSession);
   }, []);
@@ -74,6 +75,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    try {
+      const result=await getCurrentUser();
+      if (result.data.role!==state.user?.role) closeLiveConnection();
+      setState({user:result.data,isAuthenticated:true,isLoading:false});
+    } catch (error) {
+      if ((error as {status:number}).status===401) {
+        closeLiveConnection();
+        setState({user:null,isAuthenticated:false,isLoading:false});
+      }
+    }
+  },[state.user?.role]);
+
   if (restoring) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-(--color-bg-primary)">
@@ -83,7 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ ...state, signInWithGoogle, completeSignIn, logout }}>
+    <AuthContext.Provider value={{ ...state, signInWithGoogle, completeSignIn, logout,refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

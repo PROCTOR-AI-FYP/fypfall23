@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { Undo2, Trash2, Save, ArrowLeft } from 'lucide-react';
 import * as api from '@/lib/api';
 import type { SeatPolygon, Classroom } from '@/lib/types';
+import { SeatGridGenerator } from '@/components/setup/SeatGridGenerator';
 
 interface Point { x: number; y: number; }
 
@@ -136,7 +137,7 @@ export function SeatPolygonEditor() {
         <button onClick={() => navigate('/admin/classrooms')} className="p-2 rounded-[6px] text-(--color-text-muted) hover:bg-(--color-bg-surface-raised) cursor-pointer">
           <ArrowLeft size={18} />
         </button>
-        <div>
+        <div className="min-w-0">
           <h1 className="text-display-lg text-(--color-text-primary)">Seat Polygon Editor</h1>
           <p className="text-body-sm text-(--color-text-secondary)">
             {classroom?.name}, {classroom?.building} — Click to add vertices, double-click to complete a seat polygon
@@ -145,7 +146,8 @@ export function SeatPolygonEditor() {
       </div>
 
       {/* Toolbar */}
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <SeatGridGenerator capacity={classroom?.capacity ?? 30} hasSeats={seats.length>0} onGenerate={grid=>{setSeats(grid);setCurrentPoints([]);setNextSeatNumber(grid.length+1);}}/>
         <Button variant="secondary" size="sm" onClick={undoLastPoint} disabled={currentPoints.length === 0}>
           <Undo2 size={14} /> Undo point
         </Button>

@@ -128,6 +128,7 @@ export interface Case {
   classroomName: string;
   seatNumber: number;
   behaviourTypes: BehaviorType[];
+  perSignal?: Partial<Record<BehaviorType, number>>;
   compositeScore: number;
   status: CaseStatus;
   detectionEventId: string;
@@ -162,11 +163,13 @@ export interface Penalty {
   noticeReference: string;
   documentUrl?: string;
   createdAt: string;
+  revokedAt?: string;
 }
 
 export interface Appeal {
   id: string;
   caseId: string;
+  caseReferenceNo?: string;
   studentId: string;
   studentName: string;
   studentRegNo: string;
@@ -186,7 +189,7 @@ export interface Appeal {
 // Media URLs are short-lived signed URLs (about 5 minutes) and must be
 // re-fetched when they expire.
 
-export type ClipStatus = 'pending_upload' | 'available' | 'deleted_after_review';
+export type ClipStatus = 'snapshot_only' | 'pending_upload' | 'available' | 'deleted_after_review';
 
 export interface CaseMediaClip {
   url: string;

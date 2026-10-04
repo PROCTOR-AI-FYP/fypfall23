@@ -1,25 +1,35 @@
-import { Bell, ChevronRight, LogOut, User } from 'lucide-react';
+import { Bell, ChevronRight, LogOut, Menu, ArrowUpRight } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { useNavigate } from 'react-router-dom';
 import { ThemeToggle } from './ThemeToggle';
+import { useLiveRevision } from '@/lib/live-context';
+import { getNotifications } from '@/lib/api';
 
 interface HeaderProps {
   breadcrumb: string[];
   onNotificationsClick: () => void;
+  onMenuClick?: () => void;
+  navigationOpen?: boolean;
 }
 
-export function Header({ breadcrumb, onNotificationsClick }: HeaderProps) {
+export function Header({ breadcrumb, onNotificationsClick, onMenuClick, navigationOpen }: HeaderProps) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const liveRevision = useLiveRevision();
+  const [unread,setUnread] = useState(0);
+  useEffect(() => {
+    if (!user) return;
+    let cancelled=false;
+    getNotifications(user.id).then(result=>{ if (!cancelled) setUnread(result.data.filter(value=>!value.read).length); }).catch(()=>{});
+    return ()=>{cancelled=true;};
+  },[user?.id,liveRevision]);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setUserMenuOpen(false);
-      }
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setUserMenuOpen(false);
     };
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
@@ -32,69 +42,29 @@ export function Header({ breadcrumb, onNotificationsClick }: HeaderProps) {
   };
 
   return (
-    <header className="h-14 bg-(--color-bg-surface) border-b border-(--color-border-default) px-6 flex items-center justify-between shrink-0">
-      {/* Breadcrumb */}
-      <nav className="flex items-center gap-1.5 text-body-sm">
-        {breadcrumb.map((seg, i) => (
-          <span key={i} className="flex items-center gap-1.5">
-            {i > 0 && <ChevronRight size={14} className="text-(--color-text-muted)" />}
-            <span
-              className={
-                i === breadcrumb.length - 1
-                  ? 'text-(--color-text-primary) font-medium'
-                  : 'text-(--color-text-muted)'
-              }
-            >
-              {seg}
-            </span>
-          </span>
-        ))}
-      </nav>
-
-      {/* Right side */}
-      <div className="flex items-center gap-2">
+    <header className="portal-header">
+      <div className="portal-header-left">
+        <button onClick={onMenuClick} className="mobile-menu-button" aria-label="Open navigation" aria-expanded={navigationOpen} aria-controls="workspace-navigation"><Menu size={20} /></button>
+        <nav aria-label="Breadcrumb" className="portal-breadcrumb">
+          {breadcrumb.map((seg, i) => <span key={i}>{i > 0 && <ChevronRight size={13} />}<span>{seg}</span></span>)}
+        </nav>
+      </div>
+      <div className="portal-header-tools">
+        <span className="header-date">{new Date().toLocaleDateString(undefined, {day:'2-digit',month:'short',year:'numeric'})}</span>
         <ThemeToggle />
-
-        {/* Notification bell */}
-        <button
-          onClick={onNotificationsClick}
-          className="relative p-2 rounded-[6px] text-(--color-text-secondary) hover:bg-(--color-bg-surface-raised) hover:text-(--color-text-primary) transition-colors cursor-pointer"
-          aria-label="Notifications"
-        >
-          <Bell size={18} />
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-(--color-error) rounded-full" />
+        <button onClick={onNotificationsClick} className="header-icon-button" aria-label="Notifications">
+          <Bell size={19} />{unread > 0 && <span className="notification-count">{unread}</span>}
         </button>
-
-        {/* User menu */}
         <div ref={menuRef} className="relative">
-          <button
-            onClick={() => setUserMenuOpen(!userMenuOpen)}
-            className="flex items-center gap-2.5 px-2 py-1.5 rounded-[6px] hover:bg-(--color-bg-surface-raised) transition-colors cursor-pointer"
-          >
-            <div className="w-8 h-8 rounded-full bg-(--color-accent-primary-subtle) flex items-center justify-center text-(--color-accent-primary)">
-              <User size={16} />
-            </div>
-            <div className="text-left hidden sm:block">
-              <p className="text-body-sm font-medium text-(--color-text-primary) leading-tight">{user?.name}</p>
-              <p className="text-label text-(--color-text-muted) leading-tight">{user?.role}</p>
-            </div>
+          <button onClick={() => setUserMenuOpen(!userMenuOpen)} className="header-user-button" aria-expanded={userMenuOpen}>
+            <span className="user-avatar">{user?.name.split(' ').map(part => part[0]).slice(0,2).join('')}</span>
+            <span className="header-user-copy"><strong>{user?.name}</strong><span>{user?.role}</span></span>
           </button>
-
-          {userMenuOpen && (
-            <div className="absolute right-0 top-full mt-1 w-52 bg-(--color-bg-surface-overlay) border border-(--color-border-default) rounded-[8px] shadow-[var(--shadow-overlay)] py-1 z-50">
-              <div className="px-3 py-2 border-b border-(--color-border-default)">
-                <p className="text-body-sm font-medium text-(--color-text-primary)">{user?.name}</p>
-                <p className="text-label text-(--color-text-muted)">{user?.email}</p>
-              </div>
-              <button
-                onClick={handleLogout}
-                className="w-full flex items-center gap-2 px-3 py-2 text-body-sm text-(--color-error) hover:bg-(--color-error-subtle) transition-colors cursor-pointer"
-              >
-                <LogOut size={16} />
-                Sign out
-              </button>
-            </div>
-          )}
+          {userMenuOpen && <div className="header-user-menu">
+            <div><strong>{user?.name}</strong><p>{user?.email}</p></div>
+            <button onClick={() => {setUserMenuOpen(false); navigate('/');}}><ArrowUpRight size={16} />About ProctorAI</button>
+            <button onClick={handleLogout}><LogOut size={16} />Sign out</button>
+          </div>}
         </div>
       </div>
     </header>

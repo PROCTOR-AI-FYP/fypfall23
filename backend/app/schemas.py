@@ -325,6 +325,7 @@ class CaseDetailOut(BaseModel):
     classroom_name: str
     seat_number: int
     behaviour_types: list[BehaviourType]
+    per_signal: dict[str, float]
     composite_score: float
     status: CaseStatus
     detection_event_id: str | None

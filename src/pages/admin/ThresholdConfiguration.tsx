@@ -44,7 +44,7 @@ export function ThresholdConfiguration() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
         <div>
           <h1 className="text-display-lg text-(--color-text-primary)">Threshold Configuration</h1>
           <p className="text-body-sm text-(--color-text-secondary) mt-1">Configure detection sensitivity and signal weights for the composite score</p>
@@ -94,7 +94,8 @@ export function ThresholdConfiguration() {
           <h2 className="text-heading text-(--color-text-primary)">Signal weights</h2>
           <p className="text-body-sm text-(--color-text-muted) mt-0.5">Each signal's contribution to the composite suspicion score (must sum to 1.0)</p>
         </div>
-        <table className="w-full">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[520px]">
           <thead><tr className="bg-(--color-bg-surface-raised)">
             <th className="px-5 py-3 text-left text-label text-(--color-text-secondary)">Signal</th>
             <th className="px-5 py-3 text-left text-label text-(--color-text-secondary)">Weight</th>
@@ -129,6 +130,7 @@ export function ThresholdConfiguration() {
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Calibration Card */}

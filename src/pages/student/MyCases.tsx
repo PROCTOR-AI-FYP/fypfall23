@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DataTable, type Column } from '@/components/ui/DataTable';
@@ -7,6 +8,7 @@ import * as api from '@/lib/api';
 import type { Case } from '@/lib/types';
 
 export function MyCases() {
+  const liveRevision = useLiveRevision();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [cases, setCases] = useState<Case[]>([]);
@@ -15,7 +17,7 @@ export function MyCases() {
 
   const load = () => {
     if (!user) return;
-    setLoading(true);
+    if (!liveRevision) setLoading(true);
     // Student sees only their cases
     api.getCases({ studentId: user.id }).then(r => { 
       setCases(r.data); 
@@ -23,7 +25,7 @@ export function MyCases() {
     }).catch(e => { setError(e.message); setLoading(false); });
   };
   
-  useEffect(() => { load(); }, [user]);
+  useEffect(() => { load(); }, [user, liveRevision]);
 
   const columns: Column<Case>[] = [
     { key: 'referenceNo', header: 'Case ID', render: c => <span className="font-medium text-(--color-accent-primary)">{c.referenceNo}</span> },
@@ -41,7 +43,7 @@ export function MyCases() {
       <div className="bg-(--color-bg-surface-raised) p-4 rounded-[6px] border border-(--color-border-default) mb-6">
         <h3 className="text-body font-medium text-(--color-text-primary) mb-1">Understanding your cases</h3>
         <p className="text-body-sm text-(--color-text-secondary)">
-          If you have a confirmed case with an issued penalty, you have the right to file an appeal within 5 working days. 
+          If you have a confirmed case with an issued penalty, you may file an appeal within the institution's configured appeal window.
           Click on a case to view details, penalty information, and access the appeal form.
         </p>
       </div>

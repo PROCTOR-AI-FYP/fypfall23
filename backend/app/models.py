@@ -61,6 +61,7 @@ class PenaltyType(str, Enum):
 
 
 class ClipStatus(str, Enum):
+    SNAPSHOT_ONLY = "snapshot_only"
     PENDING_UPLOAD = "pending_upload"
     AVAILABLE = "available"
     DELETED_AFTER_REVIEW = "deleted_after_review"

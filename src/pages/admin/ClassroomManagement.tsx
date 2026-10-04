@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Wifi, WifiOff, Wrench } from 'lucide-react';
@@ -7,8 +8,10 @@ import { Modal } from '@/components/ui/Modal';
 import { FormField, Input, Select } from '@/components/ui/FormElements';
 import * as api from '@/lib/api';
 import type { Classroom } from '@/lib/types';
+import { SetupToolkit } from '@/components/setup/SetupToolkit';
 
 export function ClassroomManagement() {
+  const liveRevision = useLiveRevision();
   const navigate = useNavigate();
   const [classrooms, setClassrooms] = useState<Classroom[]>([]);
   const [loading, setLoading] = useState(true);
@@ -20,11 +23,11 @@ export function ClassroomManagement() {
   const [saving, setSaving] = useState(false);
 
   const load = () => {
-    setLoading(true); setError('');
+    if (!liveRevision) setLoading(true); setError('');
     api.getClassrooms().then(r => { setClassrooms(r.data); setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [liveRevision]);
 
   const cameraIcon = (status: Classroom['cameraStatus']) => {
     if (status === 'Online') return <Wifi size={14} className="text-(--color-success)" />;
@@ -63,12 +66,12 @@ export function ClassroomManagement() {
       <span className="inline-flex items-center gap-1.5 text-body-sm">{cameraIcon(c.cameraStatus)} {c.cameraStatus}</span>
     )},
     { key: 'seatMap', header: 'Seat map', render: (c) => (
-      c.seatMap ? (
+      c.seatMap?.length ? (
         <button onClick={(e) => { e.stopPropagation(); navigate(`/admin/classrooms/${c.id}/seats`); }}
           className="text-label text-(--color-accent-primary) hover:underline cursor-pointer">
           {c.seatMap.length} seats mapped
         </button>
-      ) : <span className="text-label text-(--color-text-muted)">Not configured</span>
+      ) : <button onClick={(e)=>{e.stopPropagation();navigate(`/admin/classrooms/${c.id}/seats`);}} className="text-label text-(--color-accent-primary) hover:underline cursor-pointer">Configure seat map</button>
     )},
     { key: 'actions', header: '', width: '80px', render: (c) => (
       <button onClick={(e) => { e.stopPropagation(); openEdit(c); }} className="px-2 py-1 text-label text-(--color-accent-primary) hover:bg-(--color-accent-primary-subtle) rounded-[4px] cursor-pointer">Edit</button>
@@ -77,10 +80,11 @@ export function ClassroomManagement() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <h1 className="text-display-lg text-(--color-text-primary)">Classroom Management</h1>
         <Button onClick={openCreate}><Plus size={16} /> Add classroom</Button>
       </div>
+      <div className="mb-5"><SetupToolkit/></div>
       <DataTable columns={columns} data={classrooms} loading={loading} error={error} onRetry={load} emptyMessage="No classrooms configured" searchable rowKey={c => c.id} />
       <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Edit classroom' : 'Add classroom'}
         footer={<><Button variant="secondary" onClick={() => setModalOpen(false)}>Cancel</Button><Button onClick={handleSave} loading={saving}>{editing ? 'Save' : 'Create'}</Button></>}>

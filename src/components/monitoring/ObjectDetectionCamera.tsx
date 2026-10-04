@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Camera, Play, Square, LoaderCircle, VideoOff } from 'lucide-react';
+import { Camera, Play, Square, LoaderCircle, VideoOff, ScanFace } from 'lucide-react';
 import { DEMO_API_URL, demoRequest, type ObjectMonitorStatus } from '@/lib/demo-api';
 
 const initial: ObjectMonitorStatus = {
@@ -30,7 +30,7 @@ export function ObjectDetectionCamera() {
       } catch {
         if (!controller.signal.aborted) {
           setReachable(false);
-          setStatus(previous => ({ ...previous, objects: [], checking: [], fps: 0 }));
+          setStatus(previous => ({ ...previous, objects: [], checking: [], fps: 0, head_pose: null }));
         }
       } finally { pending = false; }
     };
@@ -39,7 +39,7 @@ export function ObjectDetectionCamera() {
     return () => { window.clearInterval(timer); controller.abort(); };
   }, []);
 
-  const control = async (action: 'start' | 'stop') => {
+  const control = async (action: 'start' | 'stop' | 'head-pose/calibrate') => {
     setBusy(true);
     setError(null);
     setFeedError(false);
@@ -56,6 +56,17 @@ export function ObjectDetectionCamera() {
     stopped: 'Camera stopped', loading: 'Loading detector', ready: 'Monitoring',
     stopping: 'Stopping camera', error: 'Camera unavailable',
   }[status.phase];
+  const head = status.head_pose;
+  const headLabel = head ? ({
+    calibration_required: 'Set your neutral pose to enable head monitoring.',
+    calibrating: `Hold still… ${Math.round(head.calibration_progress*100)}%`,
+    face_forward_to_calibrate: 'Face forward and hold your normal exam posture.',
+    no_face: 'Face not visible', multiple_faces: 'Use one student per monitored view.',
+    face_too_small: 'Move closer so your face is clear.', unreliable_face: 'Face tracking uncertain',
+    neutral: 'Head pose within the configured limits',
+    turning: `Checking head movement · ${head.duration.toFixed(1)} / ${head.thresholds.seconds}s`,
+    sustained: 'Sustained head-pose signal',
+  }[head.state] ?? 'Head tracking unavailable') : 'Start monitoring to enable head pose.';
 
   return (
     <section className="mb-8 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50" aria-label="Live phone and book detection">
@@ -115,6 +126,26 @@ export function ObjectDetectionCamera() {
           {status.session_id !== null && <span className="ml-auto text-xs text-zinc-500">Session #{status.session_id}</span>}
         </div>
         <p className="text-xs leading-relaxed text-zinc-500">New objects need several seconds to confirm. Gray boxes are being checked; sustained confirmed detections create review alerts. Continuous alerts are limited to one per combination every 20 seconds.</p>
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4" aria-label="Head pose monitoring">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-zinc-100"><ScanFace size={17} /> Head pose</h3>
+            <button
+              disabled={busy || !reachable || !status.running || !head || head.calibrating || !!status.head_error}
+              onClick={() => void control('head-pose/calibrate')}
+              className="rounded-md border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs text-indigo-200 disabled:opacity-40"
+            >{head?.calibrated ? 'Recalibrate neutral pose' : 'Set neutral pose'}</button>
+          </div>
+          <p className={`mt-3 text-sm ${head?.sustained ? 'text-rose-300' : head?.violating ? 'text-amber-300' : 'text-zinc-300'}`} aria-live="polite">{headLabel}</p>
+          {head?.yaw != null && head.pitch != null && head.roll != null && (
+            <div className="mt-3 grid grid-cols-3 gap-2 text-sm tabular-nums">
+              {([['Yaw',head.yaw],['Pitch',head.pitch],['Roll',head.roll]] as const).map(([label,value]) => (
+                <div key={label} className="rounded-md bg-zinc-900 p-2"><span className="block text-xs text-zinc-500">{label}</span><span className="text-zinc-100">{value>0 ? '+' : ''}{value.toFixed(1)}°</span></div>
+              ))}
+            </div>
+          )}
+          <p className="mt-3 text-xs leading-relaxed text-zinc-500">Sit in your normal exam posture and hold still for two seconds while setting the neutral pose. Sideways turns over 30° or downward movement over 20° need two continuous seconds. Head pose alone shows a warning; review cases require stronger composite evidence.</p>
+          {status.head_error && <p role="alert" className="mt-2 text-sm text-rose-300">{status.head_error}</p>}
+        </div>
         {(error || status.error || status.alert_error) && <p role="alert" className="text-sm text-rose-300">{error || status.error || status.alert_error}</p>}
       </div>
     </section>

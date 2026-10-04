@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { DataTable, type Column } from '@/components/ui/DataTable';
 import * as api from '@/lib/api';
@@ -5,14 +6,15 @@ import type { ExamSession } from '@/lib/types';
 import { SessionStatus } from '@/lib/types';
 
 export function SessionHistory() {
+  const liveRevision = useLiveRevision();
   const [sessions, setSessions] = useState<ExamSession[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = () => {
-    setLoading(true);
+    if (!liveRevision) setLoading(true);
     api.getSessions().then(r => { setSessions(r.data); setLoading(false); });
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [liveRevision]);
 
   const columns: Column<ExamSession>[] = [
     { key: 'courseCode', header: 'Course', sortable: true, render: s => <div><span className="font-medium">{s.courseCode}</span><br/><span className="text-label text-(--color-text-muted)">{s.courseName}</span></div> },

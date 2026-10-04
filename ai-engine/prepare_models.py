@@ -26,8 +26,13 @@ def download(url, target):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--yolo', action='store_true', help='Also prepare the optional faster YOLO model')
+    parser.add_argument('--face', action='store_true', help='Prepare only the head-pose face model')
     args = parser.parse_args()
     root = Path(__file__).parent / 'models'
+    download('https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+             root / 'face_landmarker.task')
+    if args.face:
+        return
     def prepare(name):
         download(f'https://huggingface.co/IDEA-Research/grounding-dino-tiny/resolve/{REVISION}/{name}',
                  root / 'grounding-dino-tiny' / name)

@@ -1,3 +1,4 @@
+import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DataTable, type Column } from '@/components/ui/DataTable';
@@ -8,6 +9,7 @@ import * as api from '@/lib/api';
 import { type Case, CaseStatus, BehaviorType } from '@/lib/types';
 
 export function CaseManagement() {
+  const liveRevision = useLiveRevision();
   const navigate = useNavigate();
   const [cases, setCases] = useState<Case[]>([]);
   const [loading, setLoading] = useState(true);
@@ -16,7 +18,7 @@ export function CaseManagement() {
   const [behaviorFilter, setBehaviorFilter] = useState('');
 
   const load = () => {
-    setLoading(true); setError('');
+    if (!liveRevision) setLoading(true); setError('');
     const filters: Parameters<typeof api.getCases>[0] = {};
     if (statusFilter) filters.status = statusFilter as CaseStatus;
     if (behaviorFilter) filters.behaviorType = behaviorFilter as BehaviorType;
@@ -24,7 +26,7 @@ export function CaseManagement() {
       .catch(e => { setError(e.message); setLoading(false); });
   };
 
-  useEffect(() => { load(); }, [statusFilter, behaviorFilter]);
+  useEffect(() => { load(); }, [statusFilter, behaviorFilter, liveRevision]);
 
   const columns: Column<Case>[] = [
     { key: 'referenceNo', header: 'Case ID', sortable: true, width: '180px', render: (c) => (
