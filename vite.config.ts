@@ -12,7 +12,9 @@ export default defineConfig({
   },
   server: {
     watch: {
-      ignored: ['**/.backups/**'],
+      ignored: ['**/.backups/**', '**/venv/**', '**/.venv/**',
+        '**/ai-engine/models/**', '**/ai-engine/validation-output/**',
+        '**/ai-engine/checkpoints/**', '**/ai-engine/.runtime/**'],
     },
   },
 })

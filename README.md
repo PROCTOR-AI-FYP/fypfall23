@@ -6,7 +6,37 @@ violation, lip movement, phone detection, unauthorised objects), and confirmed
 incidents follow a real academic-integrity workflow: teacher review → HOD
 penalty → automated notice → student appeal.
 
-## Architecture
+## Current local camera MVP
+
+The current frontend entry point opens the **Live Alert Inbox**, with live
+phone/book detection from this PC's webcam. Its local backend is
+`backend.main:app` (SQLite + Socket.IO). The authenticated platform source in
+`backend/app/` and the role-specific frontend pages remain in the repository;
+the local camera MVP is the current default frontend.
+
+First-time setup on Windows, from the project root (tested with Node 24 and Python 3.14):
+
+```powershell
+npm ci
+python -m venv venv
+.\venv\Scripts\python.exe -m pip install -r ai-engine/requirements.txt -r backend/requirements-demo.txt
+.\venv\Scripts\python.exe ai-engine/prepare_models.py
+Copy-Item .env.example .env.local
+.\scripts\start-local.ps1
+```
+
+Open **http://127.0.0.1:5173/** and click **Start monitoring**. The local demo
+does not require Supabase configuration. Model weights download once; camera
+inference then runs locally. The model, private camera validation captures,
+local SQLite data, environments and checkpoints are excluded from Git.
+
+Setup, controls, detector limits and validation are documented in
+[the local camera guide](backend/LOCAL_CAMERA_DEMO.md) and
+[the AI engine guide](ai-engine/README.md). The local camera demo has no login
+and binds to this PC's loopback address. The platform architecture and setup
+below describe the separate authenticated backend.
+
+## Platform architecture
 
 ```
 ┌─────────────────────────────────────────────┐

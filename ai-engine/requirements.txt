@@ -1,0 +1,9 @@
+# Versions used for local camera validation. The project root venv already has these.
+torch==2.14.0
+torchvision==0.29.0
+transformers==4.57.6
+ultralytics==8.4.163
+opencv-python==5.0.0.93
+numpy==2.5.3
+mediapipe==0.10.35
+requests==2.34.2

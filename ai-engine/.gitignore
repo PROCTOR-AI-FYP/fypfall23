@@ -1,0 +1,15 @@
+__pycache__/
+.runtime/
+.pytest_cache/
+test-data/
+validation-output/
+models/*.pt
+models/.cache/
+models/clip/
+models/grounding-dino-tiny/
+models/grounding-dino-onnx/
+checkpoints/
+models/*.pth
+models/*.task
+models/*.onnx
+models/*.safetensors
