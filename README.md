@@ -198,8 +198,53 @@ and Supabase service-role credentials only in the backend service. Local
 Continue running `start-local.ps1` for the local camera-enabled platform.
 
 Cloud containers do not have the exam PC's webcam. Keep `LOCAL_CAMERA_ENABLED`
-false on the hosted backend; the local detector requires a separately
-authenticated capture/worker integration to send detections to the cloud.
+false on the hosted backend. The website now captures the viewing device's
+camera with `getUserMedia` over HTTPS (or localhost). Open **Camera check** in
+the user menu to try it; all signed-in roles can run this personal check, which
+does not save exam evidence or create cases. Allow camera access, face forward,
+and click **Set neutral pose**. Recalibrate after a camera change or prolonged
+loss of the face. A missing or uncertain face is reported without inventing
+angles. Head pose indicates orientation, not eye gaze or proof of cheating.
+
+An assigned teacher can use the same camera in **Live Monitor** during an
+active exam after selecting a registered student seat. One student is monitored
+per device-camera view. Head pose runs in a browser worker; the preview continues
+independently while sampled JPEGs are checked for phones and books by the
+existing Grounding DINO detector on Railway. Object boxes are tracked between
+server checks for display only. Object checks take seconds on a CPU; this is not
+full-frame-rate object inference or a multi-camera classroom deployment.
+
+The authenticated `/api/device-camera/*` routes accept bounded JPEG samples,
+verify current role, session and student attribution, and require repeated
+server detections before writing private Supabase snapshots into the existing
+case, notification and review workflow. Browser head-pose warnings can accompany
+an object alert, but cannot create a case on their own. Ending the exam, hiding
+the tab or stopping the camera releases capture. No microphone is requested.
+Runs expire after 90 seconds of inactivity. The current single-replica CPU
+backend accepts one model inference at a time; competing cameras retry without
+blocking their local previews.
+
+`npm ci` and `npm run build` prepare the same-origin MediaPipe worker and WASM
+assets automatically. `public/vision/face_landmarker.task` is the public Google
+MediaPipe model; its WASM files come from the pinned `@mediapipe/tasks-vision`
+package. The Railway image installs CPU vision dependencies and downloads
+`IDEA-Research/grounding-dino-tiny` at revision
+`a2bb814dd30d776dcf7e30523b00659f4f141c71` during the build, so the first vision
+deployment takes longer. `DEVICE_CAMERA_ENABLED=false` disables browser sample
+processing if needed. `DEVICE_CAMERA_MODEL_PATH` can override the model folder;
+local development also finds the existing `ai-engine/models/grounding-dino-tiny`
+folder automatically. `scripts/prepare-hosted-vision.py` reproduces the bundled
+backend detector from the tested local sources. Neither captured images nor
+private credentials are committed.
+
+Model and runtime references: [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/web_js),
+[MediaPipe license](https://github.com/google-ai-edge/mediapipe/blob/master/LICENSE),
+[Grounding DINO model](https://huggingface.co/IDEA-Research/grounding-dino-tiny),
+and [Grounding DINO license](https://github.com/IDEA-Research/GroundingDINO/blob/main/LICENSE).
+
+Run `npm run test:vision` for rotation, calibration, sustained-warning and
+tracking-loss checks. `backend/tests/test_device_camera.py` exercises capture
+permissions, uploads and evidence attribution against disposable test services.
 
 Run `npm run test:deployment` to check hosted API routing and cache policy.
 

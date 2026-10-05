@@ -27,6 +27,8 @@ class Settings(BaseSettings):
 
     app_env: Literal["development", "test", "production"] = "development"
     local_camera_enabled: bool = False
+    device_camera_enabled: bool = True
+    device_camera_model_path: str = '/opt/proctorai/grounding-dino-tiny'
 
     # --- Core institutional rule ---
     # Comma-separated list of institutional email domains. The first is the

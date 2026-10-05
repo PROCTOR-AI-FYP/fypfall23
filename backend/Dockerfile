@@ -18,11 +18,16 @@ RUN pip install -r requirements.txt
 FROM base AS test
 COPY requirements-dev.txt .
 RUN pip install -r requirements-dev.txt
+RUN pip install opencv-python-headless==4.13.0.92 numpy==2.2.6 Pillow==11.3.0
 COPY . .
 CMD ["pytest", "-p", "no:cacheprovider"]
 
 # runtime: what Railway builds (last stage)
 FROM base AS runtime
+COPY requirements-vision.txt prepare_vision_models.py ./
+RUN pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu \
+    && pip install -r requirements-vision.txt \
+    && python prepare_vision_models.py
 COPY app ./app
 COPY templates ./templates
 

@@ -1,4 +1,4 @@
-import { SessionCamera } from '@/components/monitoring/SessionCamera';
+import { DeviceCamera as SessionCamera } from '@/components/monitoring/DeviceCamera';
 import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams,useNavigate } from 'react-router-dom';

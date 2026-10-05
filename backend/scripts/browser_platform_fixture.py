@@ -39,6 +39,7 @@ from app.security import create_access_token,set_session_cookie
 from app.services import camera
 from fastapi import HTTPException
 from fastapi.responses import HTMLResponse,RedirectResponse
+from fastapi.responses import FileResponse
 import uvicorn
 
 SESSION='00000000-0000-0000-0000-00000000b001'
@@ -46,6 +47,13 @@ camera.EVIDENCE_ROOT=ROOT/'ai-engine/.runtime/platform-browser/evidence'
 SCENES={'phones_books':'live-test/frame-45.jpg','neutral':'head-pose-live/neutral.jpg',
         'left':'head-pose-live/left.jpg','right':'head-pose-live/right.jpg','down':'head-pose-live/down.jpg'}
 scene='phones_books'
+
+
+@app.get('/api/fixture/image/{name}',include_in_schema=False)
+async def fixture_image(name:str):
+    if name not in SCENES:
+        raise HTTPException(404)
+    return FileResponse(ROOT/'ai-engine/validation-output'/SCENES[name])
 
 
 class ReplayCamera:

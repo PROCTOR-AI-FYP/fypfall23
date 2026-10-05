@@ -11,6 +11,7 @@ import { ProtectedRoute } from './components/auth/ProtectedRoute';
 const LoginPage = lazy(() => import('./pages/Login').then(module => ({ default: module.LoginPage })));
 const CsvImports = lazy(() => import('./pages/setup/CsvImports').then(module => ({ default: module.CsvImports })));
 const LandingPage = lazy(() => import('./pages/Landing').then(module => ({ default: module.LandingPage })));
+const CameraCheck = lazy(() => import('./pages/CameraCheck').then(module => ({ default: module.CameraCheck })));
 
 // Admin
 const AdminDashboard = lazy(() => import('./pages/admin/Dashboard').then(module => ({ default: module.AdminDashboard })));
@@ -56,6 +57,7 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
 
             <Route element={<AppShell />}>
+              <Route path="/camera-check" element={<ProtectedRoute allowedRoles={Object.values(Role)}><CameraCheck /></ProtectedRoute>} />
               {/* Admin Routes */}
               <Route path="/admin" element={<ProtectedRoute allowedRoles={[Role.Admin]}><Navigate to="/admin/dashboard" replace /></ProtectedRoute>} />
               <Route path="/admin/dashboard" element={<ProtectedRoute allowedRoles={[Role.Admin]}><AdminDashboard /></ProtectedRoute>} />

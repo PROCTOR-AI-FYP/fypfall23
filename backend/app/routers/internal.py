@@ -78,7 +78,8 @@ async def record_detection(body: DetectionEventIn, conn: asyncpg.Connection = De
     return await save_detection(body, conn)
 
 
-async def save_detection(body: DetectionEventIn, conn: asyncpg.Connection, *, expected_student_id: str | None = None) -> CaseOut:
+async def save_detection(body: DetectionEventIn, conn: asyncpg.Connection, *, expected_student_id: str | None = None,
+                         expected_invigilator_id: str | None = None) -> CaseOut:
     session_id = str(body.session_id)
     meta = await _require_active_session(conn, session_id)
 
@@ -100,6 +101,12 @@ async def save_detection(body: DetectionEventIn, conn: asyncpg.Connection, *, ex
     behaviour_values = [b.value for b in body.behaviour_types]
     per_signal = {signal.value: score for signal, score in body.per_signal.items()}
     async with conn.transaction():
+        if expected_invigilator_id is not None:
+            session = await conn.fetchrow('SELECT invigilator_id FROM exam_sessions WHERE id=$1 FOR SHARE', body.session_id)
+            invigilator = await conn.fetchrow('SELECT role,status,deleted_at FROM users WHERE id=$1::uuid FOR SHARE', expected_invigilator_id)
+            if (session is None or str(session['invigilator_id']) != expected_invigilator_id or
+                invigilator is None or invigilator['role'] != 'teacher' or invigilator['status'] != 'active' or invigilator['deleted_at'] is not None):
+                raise HTTPException(403,'The assigned invigilator changed. Restart camera monitoring.')
         if expected_student_id is not None:
             active = await conn.fetchval('SELECT status FROM exam_sessions WHERE id=$1 FOR SHARE', body.session_id)
             mapped = await conn.fetchrow('''SELECT sa.student_id,u.status,u.deleted_at FROM seat_assignments sa

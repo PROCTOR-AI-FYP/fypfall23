@@ -11,7 +11,7 @@ test('hosted API and Socket.IO routes preserve the backend paths before the SPA 
   ]);
   const fallback = new RegExp(`^${config.rewrites.at(-1).source}$`);
   for (const route of ['/login', '/teacher/session-setup', '/exam-controller', '/']) assert.ok(fallback.test(route), route);
-  for (const route of ['/api', '/api/auth/me', '/socket.io/', '/assets/missing.js', '/internal/detections', '/healthz']) assert.ok(!fallback.test(route), route);
+  for (const route of ['/api', '/api/auth/me', '/socket.io/', '/assets/missing.js', '/vision/missing.wasm', '/vision/head.worker.js', '/internal/detections', '/healthz']) assert.ok(!fallback.test(route), route);
 });
 
 test('authenticated responses are never cached but versioned static assets can be', () => {

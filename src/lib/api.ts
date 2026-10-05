@@ -34,6 +34,9 @@ interface RequestOptions {
   query?: Query;
   body?: unknown;
   form?: FormData;
+  rawBody?: Blob;
+  signal?: AbortSignal;
+  keepalive?: boolean;
 }
 
 function errorCode(status: number): string {
@@ -67,7 +70,10 @@ export async function request<T>(method: string, path: string, options: RequestO
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (method !== 'GET') headers[CSRF_HEADER] = '1';
   let body: BodyInit | undefined;
-  if (options.form) {
+  if (options.rawBody) {
+    body = options.rawBody;
+    headers['Content-Type'] = options.rawBody.type || 'application/octet-stream';
+  } else if (options.form) {
     body = options.form;
   } else if (options.body !== undefined) {
     headers['Content-Type'] = 'application/json';
@@ -76,7 +82,7 @@ export async function request<T>(method: string, path: string, options: RequestO
 
   let response: Response;
   try {
-    response = await fetch(url, { method, headers, body, credentials: 'include' });
+    response = await fetch(url, { method, headers, body, credentials: 'include', signal: options.signal, keepalive: options.keepalive });
   } catch {
     throw { message: 'Could not reach the ProctorAI server. Check your connection.', code: 'NETWORK_ERROR', status: 0 };
   }

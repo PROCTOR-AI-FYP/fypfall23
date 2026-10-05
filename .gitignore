@@ -9,6 +9,8 @@ lerna-debug.log*
 
 node_modules
 .vercel/
+public/vision/wasm/
+public/vision/head.worker.js
 dist
 .backups
 dist-ssr

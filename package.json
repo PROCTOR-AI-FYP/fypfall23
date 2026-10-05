@@ -4,14 +4,18 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/prepare-browser-vision.mjs",
+    "prebuild": "node scripts/prepare-browser-vision.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test:auth": "node --test tests/frontend-session.test.mjs",
+    "test:vision": "node --test tests/head-pose.test.mjs tests/object-overlay.test.mjs",
     "test:deployment": "node --test tests/vercel-config.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "1.0.1",
     "@react-three/drei": "^10.7.8",
     "@react-three/fiber": "^9.7.0",
     "@supabase/supabase-js": "^2.117.1",
@@ -36,6 +40,7 @@
     "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^6.1.1",
     "oxlint": "^1.81.0",
+    "rolldown": "1.2.9",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
   }

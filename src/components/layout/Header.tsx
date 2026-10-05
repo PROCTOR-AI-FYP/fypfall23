@@ -63,6 +63,7 @@ export function Header({ breadcrumb, onNotificationsClick, onMenuClick, navigati
           {userMenuOpen && <div className="header-user-menu">
             <div><strong>{user?.name}</strong><p>{user?.email}</p></div>
             <button onClick={() => {setUserMenuOpen(false); navigate('/');}}><ArrowUpRight size={16} />About ProctorAI</button>
+            <button onClick={() => {setUserMenuOpen(false); navigate('/camera-check');}}><ArrowUpRight size={16} />Camera check</button>
             <button onClick={handleLogout}><LogOut size={16} />Sign out</button>
           </div>}
         </div>

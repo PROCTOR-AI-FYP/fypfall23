@@ -37,6 +37,7 @@ from app.routers import (
     sessions,
     camera,
     imports,
+    device_camera,
 )
 from app.services.mqtt import mqtt_service
 from app.services.media import ffmpeg_available
@@ -118,12 +119,16 @@ app.include_router(media.internal_router)
 app.include_router(media.router)
 app.include_router(camera.router)
 app.include_router(imports.router)
+app.include_router(device_camera.router)
 
 
 @app.middleware('http')
 async def publish_committed_changes(request,call_next):
     response = await call_next(request)
-    if request.method in {'POST','PUT','PATCH','DELETE'} and response.status_code < 400 and request.url.path.startswith(('/api/','/internal/')):
+    if (request.method in {'POST','PUT','PATCH','DELETE'} and response.status_code < 400
+        and request.url.path.startswith(('/api/','/internal/'))
+        and not request.url.path.startswith('/api/device-camera/')
+        and '/device-camera/' not in request.url.path):
         from app.sockets import emit_sync,revoke_user_connections
         if request.method in {'PATCH','DELETE'} and request.url.path.startswith('/api/admin/users/'):
             await revoke_user_connections(request.url.path.rsplit('/',1)[-1])
