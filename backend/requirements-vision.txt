@@ -3,3 +3,4 @@ transformers==4.57.6
 opencv-python-headless==4.13.0.92
 numpy==2.2.6
 Pillow==11.3.0
+mediapipe==0.10.33

@@ -839,7 +839,9 @@ export function subscribeToChanges(onChange: () => void): () => void {
   connection.on('sync:changed', onChange);
   connection.on('connect', onChange);
   connection.on('disconnect', onChange);
-  const retry = window.setInterval(() => { if (!connection.connected && document.visibilityState === 'visible') onChange(); },5000);
+  // Reconcile from authorized REST data even when a proxy retains a connection
+  // but a change event was missed. A healthy socket still updates immediately.
+  const retry = window.setInterval(() => { if (document.visibilityState === 'visible') onChange(); },5000);
   const focus = () => onChange();
   window.addEventListener('focus',focus);
   return () => {

@@ -203,6 +203,7 @@ export function LiveMonitor() {
                     <p className="text-label text-(--color-text-muted) mt-1.5">
                       {new Date(d.detectedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                     </p>
+                    <Button variant="ghost" size="sm" className="mt-2" onClick={()=>navigate(`/teacher/alerts?alert=${d.id}`)}>Review alert</Button>
                   </div>
                 ))
               )}

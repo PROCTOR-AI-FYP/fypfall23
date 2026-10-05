@@ -217,12 +217,31 @@ full-frame-rate object inference or a multi-camera classroom deployment.
 The authenticated `/api/device-camera/*` routes accept bounded JPEG samples,
 verify current role, session and student attribution, and require repeated
 server detections before writing private Supabase snapshots into the existing
-case, notification and review workflow. Browser head-pose warnings can accompany
-an object alert, but cannot create a case on their own. Ending the exam, hiding
+case, notification and review workflow. Exam head pose is independently verified
+by MediaPipe on the server; after neutral calibration, a sustained sideways turn
+over 30 degrees or downward tilt over 20 degrees can create its own review alert.
+A browser boolean cannot create head evidence. Hold neutral until both browser
+and exam verification finish calibrating. Ending the exam, hiding
 the tab or stopping the camera releases capture. No microphone is requested.
 Runs expire after 90 seconds of inactivity. The current single-replica CPU
 backend accepts one model inference at a time; competing cameras retry without
 blocking their local previews.
+
+Phone and book boxes retain raw model confidence. Repeated recognitions at the
+detector's verified class thresholds (phone .50, book .60) map to a review signal
+score of .80; administrators control review sensitivity on that policy scale.
+This score is not the probability that a student cheated. Three consecutive
+recognitions spanning at least three seconds are required, with gaps up to 30
+seconds allowed for hosted CPU inference. Missing recognitions reset the window.
+Head and object alerts have independent 30-second cooldowns. Evidence storage
+failures are displayed and retried rather than silently discarding detections.
+
+The single API process delivers live events directly to authenticated sockets.
+Only assigned teachers and HOD reviewers receive detailed detection events.
+All portals reconcile their authorized data every five seconds even if a proxy
+leaves a stale socket connected. Admin configures users and policies; Controllers
+schedule exams and see reports; Teachers triage their assigned exams; HODs decide
+cases and appeals; Students see and appeal only their own cases.
 
 `npm ci` and `npm run build` prepare the same-origin MediaPipe worker and WASM
 assets automatically. `public/vision/face_landmarker.task` is the public Google

@@ -19,11 +19,11 @@ function grayscale(image:ImageData) {
 }
 export class ObjectOverlayTracker {
   patches:Patch[]=[];
-  set(objects:CameraObject[],image:ImageData,now:number) {
+  set(objects:CameraObject[],image:ImageData,now:number,ttl=7000) {
     const gray=grayscale(image);
     this.patches=objects.flatMap(object=>{
       const box=object.box.map((v,i)=>v*(i%2?image.height:image.width)),sample=samples(gray,image.width,image.height,box);
-      return sample?[{object,...sample,width:box[2]-box[0],height:box[3]-box[1],expires:now+7000}]:[];
+      return sample?[{object,...sample,width:box[2]-box[0],height:box[3]-box[1],expires:now+ttl}]:[];
     });
   }
   update(image:ImageData,now:number):CameraObject[] {

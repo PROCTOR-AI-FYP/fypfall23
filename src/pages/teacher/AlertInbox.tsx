@@ -89,7 +89,7 @@ export function AlertInbox() {
     { key: 'behaviourTypes', header: 'Behaviors', render: (a) => (
       <div className="flex flex-wrap gap-1">{a.behaviourTypes.map(b => <BehaviorChip key={b} type={b} />)}</div>
     )},
-    { key: 'compositeScore', header: 'Confidence', width: '140px', render: (a) => <ConfidenceBar value={a.compositeScore} /> },
+    { key: 'compositeScore', header: 'Signal score', width: '140px', render: (a) => <ConfidenceBar value={a.compositeScore} /> },
   ];
 
   return (

@@ -89,21 +89,64 @@ class GroundingModel:
         results = []
         for frame in images:
             rows = self._infer(frame, conf, imgsz)
+            scene_rows = list(rows)
+            context_phones = []
+            context_checked = False
+            # One student is framed centrally. When the scene has only weak
+            # object candidates, preserve native detail in a bounded lower-centre
+            # context view before attempting a phone close-up. No image upscaling
+            # or lower confirmation threshold is used to manufacture a result.
+            verified = any(score >= (.50 if cls == 0 else self.book_threshold)
+                           for _,cls,score in rows)
+            if not verified and any(score >= .25 for _,_,score in rows) and min(frame.shape[:2]) > 512:
+                h,w = frame.shape[:2]
+                side = 512
+                x,y = (w-side)//2,h-side
+                context_checked = True
+                for refined,cls,confidence in self._infer(frame[y:y+side,x:x+side],conf,imgsz):
+                    refined = refined + torch.tensor([x,y,x,y])
+                    if cls == 1 and confidence >= self.book_threshold and any(
+                            original_cls == 1 and float(box_iou(original[None],refined[None])[0,0]) >= .3
+                            for original,original_cls,_ in scene_rows):
+                        rows.append((refined,cls,confidence))
+                    elif cls == 0 and confidence >= .25:
+                        context_phones.append((refined,cls,confidence))
             books = [row for row in rows if row[1] == 1]
-            if books:
+            if books and not context_checked:
                 box, _, score = max(books, key=lambda row: row[2])
                 # Recheck an uncertain SMALL book in a native-resolution crop.
                 # A second view must recognise the same location at the normal
                 # confirmation threshold; a weak crop cannot create an alert.
-                if 0.25 <= score < self.book_threshold and max(float(box[2]-box[0]), float(box[3]-box[1])) <= 128:
+                if 0.25 <= score < self.book_threshold and max(float(box[2]-box[0]), float(box[3]-box[1])) <= 192:
                     h, w = frame.shape[:2]
-                    side = min(320, h, w)
+                    side = min(512, h, w)
                     x = max(0, min(w-side, round(float((box[0]+box[2]-side)/2))))
                     y = max(0, min(h-side, round(float((box[1]+box[3]-side)/2))))
                     for refined, cls, confidence in self._infer(frame[y:y+side, x:x+side], conf, imgsz):
                         refined = refined + torch.tensor([x, y, x, y])
                         if cls == 1 and confidence >= self.book_threshold and float(box_iou(box[None], refined[None])[0, 0]) >= 0.3:
                             rows.append((refined, cls, confidence))
+                        elif cls == 0 and .25 <= confidence < .50:
+                            # Preserve a newly resolved small phone candidate for
+                            # a separate, same-location verification below.
+                            rows.append((refined,cls,confidence))
+            # Small phones need native-resolution verification. Keep scene/fabric
+            # competition and never promote a different location or a known book.
+            verified_books = [box for box,cls,score in rows if cls == 1 and score >= self.book_threshold]
+            candidates = [row for row in rows if row[1] == 0 and .25 <= row[2] < .50] + context_phones
+            phones = [row for row in candidates
+                      if not any(float(box_iou(row[0][None],book[None])[0,0]) >= .3 for book in verified_books)]
+            if phones:
+                box, _, _ = max(phones,key=lambda row:row[2])
+                if max(float(box[2]-box[0]),float(box[3]-box[1])) <= 192:
+                    h,w = frame.shape[:2]
+                    side = min(320,h,w)
+                    x = max(0,min(w-side,round(float((box[0]+box[2]-side)/2))))
+                    y = max(0,min(h-side,round(float((box[1]+box[3]-side)/2))))
+                    for refined,cls,confidence in self._infer(frame[y:y+side,x:x+side],conf,imgsz):
+                        refined = refined + torch.tensor([x,y,x,y])
+                        if cls == 0 and confidence >= .50 and float(box_iou(box[None],refined[None])[0,0]) >= .3:
+                            rows.append((refined,cls,confidence))
             selected = [row for row in rows if row[1] in classes]
             boxes, ids, scores = ([row[k] for row in selected] for k in range(3))
             results.append(SimpleNamespace(boxes=SimpleNamespace(

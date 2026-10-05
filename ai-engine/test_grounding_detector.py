@@ -22,7 +22,7 @@ def adapter(outputs):
 
 def test_small_book_is_verified_at_its_original_frame_location():
     model = adapter([[candidate([620, 410, 700, 520], .4)],
-                     [candidate([120, 105, 200, 215], .8)]])
+                     [candidate([236, 202, 316, 312], .8)]])
     detector = PhoneDetector(model=model)
     found = detector.detect(np.zeros((720, 1280, 3), dtype=np.uint8))
     assert len(found) == 1
@@ -41,6 +41,32 @@ def test_already_confident_book_needs_no_refinement():
     model = adapter([[candidate([620, 410, 700, 520], .8)]])
     PhoneDetector(model=model).detect(np.zeros((720, 1280, 3), dtype=np.uint8))
     assert model._infer.call_count == 1
+
+
+def test_small_phone_requires_verified_same_location_crop():
+    weak=(torch.tensor([620.,410.,700.,520.]),0,.35)
+    same=(torch.tensor([120.,105.,200.,215.]),0,.65)
+    context=(torch.tensor([236.,202.,316.,312.]),0,.4)
+    model=adapter([[weak],[context],[same]])
+    found=PhoneDetector(model=model).detect(np.zeros((720,1280,3),dtype=np.uint8))
+    assert len(found)==1 and found[0].confidence>.64
+    assert found[0].box==(620,410,700,520)
+
+
+def test_unrelated_phone_in_crop_does_not_upgrade_weak_scene_recognition():
+    model=adapter([[(torch.tensor([620.,410.,700.,520.]),0,.35)],[],
+                   [(torch.tensor([0.,0.,30.,30.]),0,.9)]])
+    found=PhoneDetector(model=model).detect(np.zeros((720,1280,3),dtype=np.uint8))
+    assert len(found)==1 and found[0].confidence<.5
+
+
+def test_verified_context_book_cannot_be_promoted_to_phone():
+    box=torch.tensor([620.,410.,700.,520.])
+    local=torch.tensor([236.,202.,316.,312.])
+    model=adapter([[(box,0,.4),(box,1,.3)],[(local,1,.8),(local,0,.9)]])
+    found=PhoneDetector(model=model).detect(np.zeros((720,1280,3),dtype=np.uint8))
+    assert model._infer.call_count==2
+    assert not any(d.label=='phone' and d.confidence>=.5 for d in found)
 
 
 def decode(probabilities):

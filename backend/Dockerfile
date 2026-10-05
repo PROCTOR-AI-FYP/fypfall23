@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg libportaudio2 libegl1 libgles2 libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -27,7 +27,10 @@ FROM base AS runtime
 COPY requirements-vision.txt prepare_vision_models.py ./
 RUN pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu \
     && pip install -r requirements-vision.txt \
-    && python prepare_vision_models.py
+    && pip uninstall -y opencv-contrib-python \
+    && pip install --force-reinstall --no-deps opencv-python-headless==4.13.0.92 \
+    && python prepare_vision_models.py \
+    && python -c "import cv2; import mediapipe as mp; options=mp.tasks.vision.FaceLandmarkerOptions(base_options=mp.tasks.BaseOptions(model_asset_path='/opt/proctorai/face_landmarker.task'),output_facial_transformation_matrixes=True); mp.tasks.vision.FaceLandmarker.create_from_options(options).close()"
 COPY app ./app
 COPY templates ./templates
 

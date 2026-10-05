@@ -37,6 +37,7 @@ from app.db import acquire_connection
 from app.models import Role
 from app.security import create_access_token,set_session_cookie
 from app.services import camera
+from app.services import storage
 from fastapi import HTTPException
 from fastapi.responses import HTMLResponse,RedirectResponse
 from fastapi.responses import FileResponse
@@ -45,8 +46,25 @@ import uvicorn
 SESSION='00000000-0000-0000-0000-00000000b001'
 camera.EVIDENCE_ROOT=ROOT/'ai-engine/.runtime/platform-browser/evidence'
 SCENES={'phones_books':'live-test/frame-45.jpg','neutral':'head-pose-live/neutral.jpg',
-        'left':'head-pose-live/left.jpg','right':'head-pose-live/right.jpg','down':'head-pose-live/down.jpg'}
+        'left':'head-pose-live/left.jpg','right':'head-pose-live/right.jpg','down':'head-pose-live/down.jpg',
+        'difficult':'realtime-corrected-live-v3-raw-021.jpg','empty':'realtime-corrected-live-v3-raw-000.jpg'}
 scene='phones_books'
+
+
+class FixtureStorage:
+    """Local QA adapter only; never use real Supabase keys or write real cases."""
+    def __init__(self):self.saved={}
+    async def upload(self,path,data,content_type):self.saved[path]=data
+    async def delete(self,paths):
+        for path in paths:self.saved.pop(path,None)
+    async def signed_url(self,path,expires_in=60):
+        return '/api/fixture/image/phones_books'
+
+
+fixture_storage=FixtureStorage()
+storage.get_storage=lambda:fixture_storage
+from app.routers import media
+media.get_storage=lambda:fixture_storage
 
 
 @app.get('/api/fixture/image/{name}',include_in_schema=False)

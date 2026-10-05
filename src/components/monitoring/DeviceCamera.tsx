@@ -6,7 +6,7 @@ import type { HeadState } from '@/lib/vision/head-pose';
 import { ObjectOverlayTracker, type CameraObject } from '@/lib/vision/object-tracking';
 
 type Seat={seat_number:number;student_name:string;registration_no:string};
-type SampleResult={objects:CameraObject[];ai_seconds:number;alert:unknown|null;alert_error:string|null};
+type SampleResult={objects:CameraObject[];ai_seconds:number;alert:unknown|null;alert_error:string|null;review_observations:number};
 interface Capture {
   stream:MediaStream;worker:Worker;controller:AbortController;run:string|null;
   head:HeadState|null;ready:boolean;headPending:boolean;stopped:boolean;
@@ -37,6 +37,21 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
   const [error,setError]=useState(''),[objectMessage,setObjectMessage]=useState('');
   const [objects,setObjects]=useState<CameraObject[]>([]),[head,setHead]=useState<HeadState|null>(null);
   const [headError,setHeadError]=useState(''),[seconds,setSeconds]=useState<number|null>(null),[saved,setSaved]=useState(false);
+  const [verification,setVerification]=useState(''),[headVerificationError,setHeadVerificationError]=useState('');
+  const [alertCount,setAlertCount]=useState(0);
+  const receiveAlert=(result:{alert:unknown|null;alert_error:string|null})=>{
+    if(result.alert){setSaved(true);setAlertCount(value=>value+1);}
+    return result.alert_error;
+  };
+  const calibrate=()=>{
+    const state=capture.current;if(!state)return;
+    state.worker.postMessage({type:'calibrate'});
+    if(sessionId&&state.run){
+      setVerification('Hold still until exam verification finishes calibrating.');
+      void request('POST',`/api/device-camera/${state.run}/head/calibrate`)
+        .catch(reason=>setHeadVerificationError(reason.message));
+    }
+  };
 
   const stop=useCallback((message='')=>{
     const state=capture.current;capture.current=null;
@@ -47,7 +62,7 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
     }
     if(video.current)video.current.srcObject=null;
     const context=overlay.current?.getContext('2d');if(context)context.clearRect(0,0,context.canvas.width,context.canvas.height);
-    if(mounted.current){setPhase('stopped');setHead(null);setObjects([]);setObjectMessage('');if(message)setError(message);}
+    if(mounted.current){setPhase('stopped');setHead(null);setObjects([]);setObjectMessage('');setVerification('');setHeadVerificationError('');if(message)setError(message);}
   },[]);
   useEffect(()=>{
     mounted.current=true;
@@ -67,7 +82,7 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
 
   const start=async()=>{
     if(starting.current||capture.current)return;
-    starting.current=true;setPhase('starting');setError('');setHeadError('');setSaved(false);setSeconds(null);setObjects([]);
+    starting.current=true;setPhase('starting');setError('');setHeadError('');setHeadVerificationError('');setVerification('');setSaved(false);setAlertCount(0);setSeconds(null);setObjects([]);
     let stream:MediaStream|null=null;
     try{
       if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia)throw Error('Open this page using HTTPS or localhost to access the device camera.');
@@ -87,7 +102,7 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
       video.current!.srcObject=stream;await video.current!.play();
       const available=await navigator.mediaDevices.enumerateDevices();if(capture.current!==state)return;
       setDevices(available.filter(value=>value.kind==='videoinput'));
-      worker.postMessage({type:'init',origin:window.location.origin});setPhase('running');setObjectMessage('Loading the phone and book checker…');
+      worker.postMessage({type:'init',origin:window.location.origin});setObjectMessage('Loading the phone and book checker…');
       const drawCanvas=document.createElement('canvas');drawCanvas.width=320;
       const drawContext=drawCanvas.getContext('2d',{willReadFrequently:true})!;
       const schedule=(fn:()=>void,delay:number)=>{if(!state.stopped){const timer=window.setTimeout(()=>{state.timers.delete(timer);fn();},delay);state.timers.add(timer);}};
@@ -122,6 +137,31 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
       const result=await request<{run_id:string}>('POST',sessionId?`/api/sessions/${sessionId}/device-camera/start`:'/api/device-camera/check/start',sessionId?{body:{seat_number:Number(seat)}}:{});
       state.run=result.run_id;
       if(state.stopped){void request('POST',`/api/device-camera/${state.run}/stop`).catch(()=>{});return;}
+      setPhase('running');
+      let headIndex=0;
+      const verifyHead=async()=>{
+        if(state.stopped||!sessionId)return;
+        const source=video.current!,sampleCanvas=document.createElement('canvas');
+        const scale=Math.min(1,960/source.videoWidth,1200/source.videoHeight);
+        sampleCanvas.width=Math.round(source.videoWidth*scale);sampleCanvas.height=Math.round(source.videoHeight*scale);
+        sampleCanvas.getContext('2d')!.drawImage(source,0,0,sampleCanvas.width,sampleCanvas.height);
+        try{
+          const result=await request<{head:HeadState;alert:unknown|null;alert_error:string|null;review_enabled:boolean}>('POST',`/api/device-camera/${state.run}/head/frame`,{
+            query:{frame_index:headIndex++},rawBody:await blob(sampleCanvas),signal:AbortSignal.any([state.controller.signal,AbortSignal.timeout(15000)])});
+          if(state.stopped)return;
+          setHeadVerificationError(receiveAlert(result)||'');
+          setVerification(result.head.calibrating?`Exam verification calibrating · ${Math.round(result.head.calibration_progress*100)}% · keep facing forward`:
+            result.head.sustained?(result.review_enabled?'Sustained exam head pose verified; alerts repeat at most every 30 seconds.':'Head pose verified; below the administrator’s review threshold.'):
+            result.head.calibrated?'Exam head pose verified':headLabels[result.head.state]||'Set neutral for exam verification.');
+        }catch(reason){
+          if(state.stopped)return;
+          const failure=reason as {status?:number;message:string};
+          if([401,403,404,409,410].includes(failure.status??0)){stop(failure.message);return;}
+          setHeadVerificationError(failure.status===429?'Head verifier busy; retrying…':failure.message);
+        }
+        schedule(()=>void verifyHead(),250);
+      };
+      void verifyHead();
       let index=0;
       const sample=async()=>{
         if(state.stopped)return;
@@ -134,8 +174,9 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
         try{
           const result=await request<SampleResult>('POST',`/api/device-camera/${state.run}/frame`,{query:{frame_index:index++,head_sustained:state.head?.sustained??false},rawBody:await blob(sampleCanvas),signal:AbortSignal.any([state.controller.signal,AbortSignal.timeout(45000)])});
           if(state.stopped)return;
-          state.tracker.set(result.objects,image,performance.now());setObjects(result.objects);setSeconds(result.ai_seconds);
-          setObjectMessage(result.alert_error||(result.objects.length?'':'Checking for phones and books…'));if(result.alert)setSaved(true);
+          state.tracker.set(result.objects,image,performance.now(),Math.min(20000,Math.max(7000,(result.ai_seconds*1.5+2)*1000)));setObjects(result.objects);setSeconds(result.ai_seconds);
+          setObjectMessage(receiveAlert(result)||(result.objects.length&&sessionId?(result.alert?'Review alert saved.':result.review_observations>=3?'Repeated recognition verified; alerts repeat at most every 30 seconds.':result.review_observations?`Exam verification · ${result.review_observations}/3 recognitions · keep the object visible`:'Recognition visible; below the administrator’s review threshold.'):
+            result.objects.length?'':'Checking for phones and books…'));
         }catch(reason){
           if(state.stopped)return;
           const failure=reason as {status?:number;message:string};
@@ -162,10 +203,12 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
       {sessionId&&!seats.length&&<p className="text-body-sm text-(--color-warning)">Assign registered students to the exam seats before monitoring.</p>}
       <p className="text-body-sm" aria-live="polite">{objects.map(value=>`${value.label==='phone'?'Phone':'Book'} · ${Math.round(value.confidence*100)}%${value.confirmed?'':' · checking'}`).join(' · ')||objectMessage||'Phone and book detection ready'}{seconds!==null&&<span className="ml-2 text-(--color-text-muted)">Object check: {seconds.toFixed(1)}s</span>}</p>
       {!!objects.length&&objectMessage&&<p role="status" className="text-body-sm text-(--color-warning)">{objectMessage}</p>}
-      <div className="flex flex-wrap justify-between items-center gap-3"><p className={`text-body-sm ${head?.sustained?'text-(--color-error)':head?.violating?'text-(--color-warning)':''}`} aria-live="polite">{head?headLabels[head.state]||head.state:phase==='running'?'Loading head tracking…':'Set neutral after starting the camera.'}{head?.calibrating&&` ${Math.round(head.calibration_progress*100)}%`}</p><Button variant="secondary" disabled={phase!=='running'||!head||head.calibrating||!!headError} onClick={()=>capture.current?.worker.postMessage({type:'calibrate'})}>{head?.calibrated?'Recalibrate':'Set neutral pose'}</Button></div>
+      <div className="flex flex-wrap justify-between items-center gap-3"><p className={`text-body-sm ${head?.sustained?'text-(--color-error)':head?.violating?'text-(--color-warning)':''}`} aria-live="polite">{head?headLabels[head.state]||head.state:phase==='running'?'Loading head tracking…':'Set neutral after starting the camera.'}{head?.calibrating&&` ${Math.round(head.calibration_progress*100)}%`}</p><Button variant="secondary" disabled={phase!=='running'||!head||head.calibrating||!!headError} onClick={calibrate}>{head?.calibrated?'Recalibrate':'Set neutral pose'}</Button></div>
+      {sessionId&&verification&&<p role="status" className="text-body-sm">{verification}</p>}
+      {headVerificationError&&<p role="alert" className="text-body-sm text-(--color-error)">{headVerificationError}</p>}
       {head?.yaw!==null&&head?.yaw!==undefined&&<div className="grid grid-cols-3 gap-3 text-body-sm tabular-nums">{([['Yaw',head.yaw],['Pitch',head.pitch],['Roll',head.roll]] as const).map(([label,value])=><p key={label}>{label} {value!==null?`${value>0?'+':''}${value.toFixed(1)}°`:'—'}</p>)}</div>}
-      {saved&&<p className="text-body-sm text-(--color-success)">Confirmed object evidence saved to this exam’s review workflow.</p>}
-      <p className="text-label text-(--color-text-muted)">{sessionId?'One registered student per camera view.':'Equipment check only: no exam evidence or cases are saved.'} Head tracking runs on this device. Sampled images go to the hosted object checker. Set neutral while facing forward for two seconds. Sideways turns over 30° or looking down over 20° require two continuous seconds. Head pose alone is a warning.</p>
+      {saved&&<p role="status" className="text-body-sm text-(--color-success)">{alertCount} live {alertCount===1?'alert':'alerts'} saved to this exam’s review workflow. Open Alert Inbox to review.</p>}
+      <p className="text-label text-(--color-text-muted)">{sessionId?'One registered student per camera view. Verified sustained head pose and repeated object recognition create review alerts. Hold neutral until exam verification finishes calibrating. Head pose is verified from server samples independently of object checks.':'Equipment check only: no exam evidence or cases are saved.'} Head tracking runs on this device. Sideways turns over 30° or looking down over 20° require two continuous seconds. All alerts require human review; no automatic penalty.</p>
       {(error||headError)&&<p role="alert" className="text-body-sm text-(--color-error)">{error||headError}</p>}
     </div>
   </section>;

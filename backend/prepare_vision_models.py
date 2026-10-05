@@ -10,3 +10,6 @@ root.mkdir(parents=True, exist_ok=True)
 for name in FILES:
     urlretrieve(f'https://huggingface.co/IDEA-Research/grounding-dino-tiny/resolve/{REVISION}/{name}', root / name)
     print(f'Prepared {name}', flush=True)
+urlretrieve('https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+            root.parent / 'face_landmarker.task')
+print('Prepared face_landmarker.task', flush=True)

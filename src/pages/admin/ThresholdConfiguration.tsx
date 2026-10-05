@@ -61,6 +61,7 @@ export function ThresholdConfiguration() {
         <div className="px-5 py-4 border-b border-(--color-border-default)">
           <h2 className="text-heading text-(--color-text-primary)">Detection sensitivity</h2>
           <p className="text-body-sm text-(--color-text-muted) mt-0.5">Higher values increase detection rate but may produce more false positives</p>
+          <p className="text-body-sm text-(--color-text-muted) mt-2">Exam camera review uses repeated verified phone/book recognitions and calibrated sustained head pose. Camera boxes show raw model confidence; alert scores express review policy strength, not probability of misconduct.</p>
         </div>
         <div className="divide-y divide-(--color-border-default)">
           {configs.map(config => {

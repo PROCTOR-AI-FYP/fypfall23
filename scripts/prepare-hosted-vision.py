@@ -1,4 +1,4 @@
-"""Bundle the tested local object detector for the backend Docker build."""
+"""Bundle the tested local object and head detectors for the backend Docker build."""
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
@@ -17,3 +17,5 @@ ground = ground.replace('        from torchvision.ops import box_iou', '''      
             areas_b = (b[:, 2:] - b[:, :2]).prod(-1)
             return intersection / (areas_a[:, None] + areas_b[None, :] - intersection).clamp(min=1e-9)''')
 (target / 'grounding.py').write_text(ground, encoding='utf-8')
+head = (root / 'ai-engine/head_pose_detector.py').read_text(encoding='utf-8')
+(target / 'head_pose.py').write_text(head, encoding='utf-8')

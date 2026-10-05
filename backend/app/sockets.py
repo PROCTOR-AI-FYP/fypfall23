@@ -9,9 +9,9 @@ notifications only; they cannot join exam rooms or receive detection alerts.
 Cross-site WebSocket hijacking is blocked by the Origin check below
 (cors_allowed_origins), since cookies ride along on cross-origin handshakes.
 
-AsyncRedisManager routes emits through Redis pub/sub so another process
-(e.g. a future worker) can emit too; with a single API replica it is not
-needed for fan-out.
+The single API process delivers directly to its authenticated connections.
+Multiple API processes would require a shared Socket.IO manager and sticky
+routing; the current deployment deliberately runs one process and replica.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from app.config import settings
 from app.db import acquire_connection
 from app.deps import resolve_session_user
 from app.models import Role
-from app.services.authorization import can_access_session
+from app.services.authorization import can_review_evidence
 
 logger = logging.getLogger("proctorai.sockets")
 
@@ -37,7 +37,9 @@ EVENT_JOIN_SESSION = "join_session"
 
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    client_manager=socketio.AsyncRedisManager(settings.redis_url),
+    # This deployment has one API process. Direct local fan-out avoids a Redis
+    # pub/sub dependency for live delivery; REST ingestion runs in this process.
+    client_manager=socketio.AsyncManager(),
     # An empty list would disable origin checks entirely; None means same-origin only.
     cors_allowed_origins=settings.cors_origins or None,
 )
@@ -95,7 +97,7 @@ async def join_session(sid: str, data: Any) -> dict[str, Any]:
         return {"ok": False, "error": "not_found"}
 
     invigilator_id = str(row["invigilator_id"]) if row["invigilator_id"] is not None else None
-    if not can_access_session(role=resolved.role, user_id=resolved.user_id, invigilator_id=invigilator_id):
+    if not can_review_evidence(role=resolved.role, user_id=resolved.user_id, invigilator_id=invigilator_id):
         return {"ok": False, "error": "forbidden"}
 
     await sio.enter_room(sid, session_room(session_id))
@@ -118,7 +120,7 @@ async def emit_detection(session_id: str, invigilator_id: str | None, payload: d
                 async with acquire_connection() as conn:
                     current = await resolve_session_user(conn,session.get('token'))
                     assigned = await conn.fetchval('SELECT invigilator_id FROM exam_sessions WHERE id=$1::uuid',session_id)
-                if not can_access_session(role=current.role,user_id=current.user_id,invigilator_id=str(assigned) if assigned else None):
+                if not can_review_evidence(role=current.role,user_id=current.user_id,invigilator_id=str(assigned) if assigned else None):
                     await sio.disconnect(sid)
             except HTTPException:
                 await sio.disconnect(sid)

@@ -82,7 +82,8 @@ export function CaseDetail() {
 
           {/* Confidence breakdown */}
           <div className="bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default) p-5">
-            <h2 className="text-heading text-(--color-text-primary) mb-4">Confidence breakdown</h2>
+            <h2 className="text-heading text-(--color-text-primary) mb-4">Review signal breakdown</h2>
+            <p className="text-body-sm text-(--color-text-muted) mb-4">Policy scores support human review. They are not the probability of misconduct.</p>
             <div className="space-y-3">
               {caseData.behaviourTypes.map(b => (
                 <div key={b} className="flex items-center gap-4">

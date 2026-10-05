@@ -257,8 +257,9 @@ async def live_server(client: AsyncClient) -> AsyncIterator[str]:
     await task
 
 
+@pytest.mark.parametrize('transport',['websocket','polling'])
 async def test_end_to_end_detection_reaches_connected_socketio_client(
-    client: AsyncClient, active_session: str, live_server: str, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, active_session: str, live_server: str, monkeypatch: pytest.MonkeyPatch, transport: str
 ) -> None:
     monkeypatch.setattr(mqtt.mqtt_service, "publish", _noop_publish)
     teacher_token = await login(client, TEACHER_EMAIL)
@@ -267,19 +268,19 @@ async def test_end_to_end_detection_reaches_connected_socketio_client(
     for rejected_headers in ({}, session_cookie("not-a-jwt")):
         client_socket = socketio.AsyncClient()
         with pytest.raises(socketio.exceptions.ConnectionError):
-            await client_socket.connect(live_server, headers=rejected_headers, transports=["websocket"])
+            await client_socket.connect(live_server, headers=rejected_headers, transports=[transport])
 
     student = socketio.AsyncClient()
     student_alerts: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     student.on(sockets.EVENT_ALERT_NEW, student_alerts.put)
     student_changes: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     student.on('sync:changed', student_changes.put)
-    await student.connect(live_server,headers=session_cookie(student_token),transports=['websocket'])
+    await student.connect(live_server,headers=session_cookie(student_token),transports=[transport])
     assert await student.call(sockets.EVENT_JOIN_SESSION,{'session_id':active_session}) == {'ok':False,'error':'forbidden'}
     teacher = socketio.AsyncClient()
     received: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     teacher.on(sockets.EVENT_ALERT_NEW, received.put)
-    await teacher.connect(live_server, headers=session_cookie(teacher_token), transports=["websocket"])
+    await teacher.connect(live_server, headers=session_cookie(teacher_token), transports=[transport])
     try:
         assert await teacher.call(sockets.EVENT_JOIN_SESSION, {"session_id": OTHER_SESSION_ID}) == {
             "ok": False, "error": "forbidden"

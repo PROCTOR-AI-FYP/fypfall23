@@ -41,7 +41,7 @@ export function CaseManagement() {
     { key: 'behaviourTypes', header: 'Behavior', render: (c) => (
       <div className="flex flex-wrap gap-1">{c.behaviourTypes.map(b => <BehaviorChip key={b} type={b} />)}</div>
     )},
-    { key: 'compositeScore', header: 'Confidence', width: '140px', render: (c) => <ConfidenceBar value={c.compositeScore} /> },
+    { key: 'compositeScore', header: 'Signal score', width: '140px', render: (c) => <ConfidenceBar value={c.compositeScore} /> },
     { key: 'status', header: 'Status', sortable: true, render: (c) => <StatusChip status={c.status} /> },
     { key: 'createdAt', header: 'Date', sortable: true, width: '100px', render: (c) => (
       <span className="text-body-sm text-(--color-text-muted) tabular-nums">{new Date(c.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
