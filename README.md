@@ -138,7 +138,7 @@ VITE_API_BASE_URL=
 # Staging on Railway
 VITE_API_BASE_URL=https://proctorai-staging.up.railway.app
 
-# Production via Vercel rewrites (cookie is first-party)
+# Production via vercel.mjs rewrites (cookie is first-party)
 VITE_API_BASE_URL=
 ```
 
@@ -157,6 +157,46 @@ Sign-in now checks `/api/auth/me` before opening a role portal, so a rejected
 cookie produces a sign-in error rather than a dashboard flash. During an OAuth
 callback, an old account cookie is not used to open its previous portal while
 the new sign-in is still being confirmed.
+
+### Hosted website and localhost development
+
+The frontend is a Vercel Vite project at the repository root. The FastAPI API
+is a separate Railway service built from `/backend` using its Dockerfile.
+Keep both services connected to `PROCTOR-AI-FYP/fypfall23`, branch `main`, for
+automatic updates. The backend's watch pattern is `/backend/**`, so frontend
+changes do not rebuild its Docker image. Railway settings define the root
+directory, Dockerfile, health check `/healthz`, and sleeping disabled; the
+older `backend/railway.json` is retained for existing setups.
+
+In Vercel Production and Preview, set `PROCTORAI_BACKEND_URL` to the deployed
+API's HTTPS origin, leave `VITE_API_BASE_URL` empty, and configure
+`VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for the existing Supabase
+project. `vercel.mjs` forwards API and Socket.IO paths before the SPA fallback.
+Authenticated responses are not cached. The configuration refuses an absent,
+local, or insecure hosted API target. Private worker endpoints are not proxied
+through the website. `.vercelignore` excludes Python services, private files,
+local environments, and deliverables from frontend CLI uploads.
+
+In Supabase Authentication URL Configuration, use the canonical hosted origin
+as Site URL and add its exact `/login` address, plus
+`http://localhost:5173/login` and `http://127.0.0.1:5173/login`, as allowed
+redirects. Keep the Google OAuth client's redirect URI pointing to Supabase's
+`/auth/v1/callback`. A trusted preview that needs sign-in must have its exact
+origin added to the backend's CORS allowlist and its `/login` URL added to
+Supabase; building a preview alone does not grant production API access.
+
+The hosted backend uses `APP_ENV=production`, secure host-only cookies with
+`SESSION_COOKIE_SAMESITE=lax`, an exact HTTPS CORS origin list, independent
+random JWT/internal API secrets, and TLS Redis. Store private database, Redis,
+and Supabase service-role credentials only in the backend service. Local
+`.env.local` and `backend/.env` remain independent and are never committed.
+Continue running `start-local.ps1` for the local camera-enabled platform.
+
+Cloud containers do not have the exam PC's webcam. Keep `LOCAL_CAMERA_ENABLED`
+false on the hosted backend; the local detector requires a separately
+authenticated capture/worker integration to send detections to the cloud.
+
+Run `npm run test:deployment` to check hosted API routing and cache policy.
 
 ## Running tests
 

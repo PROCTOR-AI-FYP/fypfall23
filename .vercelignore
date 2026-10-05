@@ -1,0 +1,18 @@
+# The Vercel project builds only the browser application.
+backend/
+ai-engine/
+db/
+deliverables/
+.backups/
+venv/
+.venv/
+node_modules/
+dist/
+.env
+.env.*
+*.log
+*.ipynb
+*.pt
+*.onnx
+*.db
+*.sqlite*

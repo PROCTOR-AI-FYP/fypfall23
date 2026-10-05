@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test:auth": "node --test tests/frontend-session.test.mjs",
+    "test:deployment": "node --test tests/vercel-config.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
