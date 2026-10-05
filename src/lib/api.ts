@@ -795,8 +795,16 @@ let socket: Socket | null = null;
 
 function getSocket(): Socket {
   if (!socket) {
-    // Vercel's external rewrite matches /socket.io; avoid its trailing-slash 404.
-    socket = io(API_BASE_URL || window.location.origin, { withCredentials: true, addTrailingSlash: false, transports: ['websocket', 'polling'] });
+    // Keep the session cookie first-party through the Vercel HTTP proxy.
+    // Its external rewrite does not preserve WebSocket upgrades; long-polling
+    // still delivers server events immediately. Local Vite supports WebSocket.
+    socket = io(API_BASE_URL || window.location.origin, {
+      withCredentials: true,
+      addTrailingSlash: false,
+      transports: import.meta.env.DEV ? ['websocket', 'polling'] : ['polling'],
+      upgrade: import.meta.env.DEV,
+      tryAllTransports: true,
+    });
   }
   return socket;
 }

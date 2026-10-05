@@ -172,6 +172,11 @@ In Vercel Production and Preview, set `PROCTORAI_BACKEND_URL` to the deployed
 API's HTTPS origin, leave `VITE_API_BASE_URL` empty, and configure
 `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for the existing Supabase
 project. `vercel.mjs` forwards API and Socket.IO paths before the SPA fallback.
+The production client uses Socket.IO HTTP long-polling because the external
+Vercel rewrite does not preserve WebSocket upgrades. Events are delivered as
+they arrive, with the same secure first-party session cookie. Local Vite
+development uses WebSocket with polling fallback. Keep the Railway API at one
+replica for this setup; multiple replicas require sticky routing for polling.
 Authenticated responses are not cached. The configuration refuses an absent,
 local, or insecure hosted API target. Private worker endpoints are not proxied
 through the website. `.vercelignore` excludes Python services, private files,
