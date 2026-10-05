@@ -795,7 +795,8 @@ let socket: Socket | null = null;
 
 function getSocket(): Socket {
   if (!socket) {
-    socket = io(API_BASE_URL || window.location.origin, { withCredentials: true, transports: ['websocket', 'polling'] });
+    // Vercel's external rewrite matches /socket.io; avoid its trailing-slash 404.
+    socket = io(API_BASE_URL || window.location.origin, { withCredentials: true, addTrailingSlash: false, transports: ['websocket', 'polling'] });
   }
   return socket;
 }
