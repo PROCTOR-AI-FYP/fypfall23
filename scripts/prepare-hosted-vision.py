@@ -9,6 +9,7 @@ phone = (root / 'ai-engine/phone_detector.py').read_text(encoding='utf-8')
 phone = phone.replace('from grounding_detector import GroundingModel', 'from .grounding import GroundingModel')
 (target / 'phone.py').write_text(phone, encoding='utf-8')
 ground = (root / 'ai-engine/grounding_detector.py').read_text(encoding='utf-8')
+ground = ground.replace('No images leave this computer.', 'Inference is local to this backend; images are not sent to external AI providers.')
 ground = ground.replace('        from torchvision.ops import box_iou', '''        def box_iou(a, b):
             intersection = (torch.minimum(a[:, None, 2:], b[None, :, 2:]) -
                             torch.maximum(a[:, None, :2], b[None, :, :2])).clamp(min=0).prod(-1)

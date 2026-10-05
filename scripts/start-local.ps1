@@ -27,6 +27,8 @@ if (-not (Test-LocalEndpoint 'http://127.0.0.1:8000/healthz')) {
 }
 if (-not (Test-LocalEndpoint 'http://127.0.0.1:5173/')) {
     $nodePath = (Get-Command node -ErrorAction Stop).Source
+    & $nodePath (Join-Path $projectRoot 'scripts/prepare-browser-vision.mjs')
+    if ($LASTEXITCODE -ne 0) { throw 'Could not prepare browser camera assets. Run npm ci, then retry.' }
     $vitePath = Join-Path $projectRoot 'node_modules/vite/bin/vite.js'
     $frontend = Start-Process -FilePath $nodePath -ArgumentList @($vitePath, '--host', '127.0.0.1', '--port', '5173', '--strictPort') -WorkingDirectory $projectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimeDir 'frontend.out.log') -RedirectStandardError (Join-Path $runtimeDir 'frontend.err.log') -PassThru
     $servers.frontend = $frontend.Id

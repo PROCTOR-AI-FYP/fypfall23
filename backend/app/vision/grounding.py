@@ -1,6 +1,6 @@
 """Offline Grounding DINO adapter for the phone/book detector.
 
-Text queries are fixed to the exam policy. No images leave this computer.
+Text queries are fixed to the exam policy. Inference is local to this backend; images are not sent to external AI providers.
 Uses the official, unmodified 900-query checkpoint; smaller image inputs
 reduce CPU cost without changing the learned query embeddings.
 """
