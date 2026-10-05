@@ -6,6 +6,8 @@
 // ═══════════════════════════════════════════
 
 import { io, type Socket } from 'socket.io-client';
+import { resolveApiBaseUrl } from './api-origin';
+import { establishBrowserSession } from './browser-session';
 import type {
   User, Classroom, ExamSession, Case, Appeal, DetectionEvent,
   ThresholdConfig, AuditLogEntry, Notification, ExamScheduleEntry,
@@ -21,7 +23,7 @@ import {
 // on state-changing methods, the CSRF header the backend requires.
 
 // Empty string = same origin (e.g. a Vercel rewrite proxying /api to the API).
-export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
+export const API_BASE_URL = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL, import.meta.env.DEV);
 const CSRF_HEADER = 'X-ProctorAI-CSRF';
 // Dispatched on any 401 outside /api/auth so the auth context can drop a dead session.
 export const UNAUTHORIZED_EVENT = 'proctorai:unauthorized';
@@ -517,7 +519,10 @@ function toAssignment(a: ApiAssignment): InvigilatorAssignment {
 
 /** Trades a verified Supabase (Google) access token for the app's session cookie. */
 export async function exchangeGoogleSession(supabaseAccessToken: string): Promise<ApiResponse<User>> {
-  const user = await request<ApiUser>('POST', '/api/auth/session', { body: { supabase_access_token: supabaseAccessToken } });
+  const user = await establishBrowserSession(
+    () => request<ApiUser>('POST', '/api/auth/session', { body: { supabase_access_token: supabaseAccessToken } }),
+    () => request<ApiUser>('GET', '/api/auth/me'),
+  );
   return { data: toUser(user) };
 }
 

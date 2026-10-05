@@ -28,6 +28,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [restoring, setRestoring] = useState(true);
 
   useEffect(() => {
+    // The OAuth callback must establish its own account first. Restoring a
+    // previous cookie here can briefly open that account's portal before the
+    // new exchange finishes (or fails because the browser rejected its cookie).
+    if (window.location.pathname === '/login' && new URLSearchParams(window.location.search).has('code')) {
+      setRestoring(false);
+      return;
+    }
     let cancelled = false;
     getCurrentUser()
       .then(res => { if (!cancelled) setState({ user: res.data, isAuthenticated: true, isLoading: false }); })
@@ -60,7 +67,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setState({ user: res.data, isAuthenticated: true, isLoading: false });
       return res.data;
     } catch (err) {
-      setState(prev => ({ ...prev, isLoading: false }));
+      closeLiveConnection();
+      setState({ user: null, isAuthenticated: false, isLoading: false });
       throw err;
     }
   }, []);

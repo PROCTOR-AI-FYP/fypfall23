@@ -1,9 +1,13 @@
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import path from 'path'
+import { resolveDevProxyTarget } from './src/lib/api-origin.ts'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, import.meta.dirname, '')
+  const proxyTarget = resolveDevProxyTarget(env.VITE_API_BASE_URL, env.PROCTORAI_API_PROXY_TARGET)
+  return {
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
@@ -12,8 +16,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': { target: process.env.PROCTORAI_API_PROXY_TARGET || 'http://127.0.0.1:8000',changeOrigin:false },
-      '/socket.io': { target: process.env.PROCTORAI_API_PROXY_TARGET || 'http://127.0.0.1:8000',ws:true,changeOrigin:false },
+      '/api': { target: proxyTarget,changeOrigin:false },
+      '/socket.io': { target: proxyTarget,ws:true,changeOrigin:false },
     },
     watch: {
       ignored: ['**/.backups/**', '**/venv/**', '**/.venv/**',
@@ -21,4 +25,5 @@ export default defineConfig({
         '**/ai-engine/checkpoints/**', '**/ai-engine/.runtime/**'],
     },
   },
+  }
 })

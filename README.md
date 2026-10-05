@@ -97,7 +97,7 @@ npm install
 # Copy and fill in environment variables
 cp .env.example .env.local
 # Edit .env.local:
-#   VITE_API_BASE_URL=http://localhost:8000  (or leave empty if using Vercel rewrites)
+#   VITE_API_BASE_URL=  (Vite's local proxy / Vercel rewrites)
 #   VITE_SUPABASE_URL=https://<project-ref>.supabase.co
 #   VITE_SUPABASE_ANON_KEY=<your-anon-key>
 #   VITE_ALLOWED_EMAIL_DOMAIN=students.au.edu.pk
@@ -130,8 +130,10 @@ docker compose exec api python -m app.cli db-seed
 Set `VITE_API_BASE_URL` in `.env.local`:
 
 ```bash
-# Local backend
-VITE_API_BASE_URL=http://localhost:8000
+# Local backend (same-origin Vite proxy)
+VITE_API_BASE_URL=
+# Optional when the local API uses another port:
+# PROCTORAI_API_PROXY_TARGET=http://127.0.0.1:8001
 
 # Staging on Railway
 VITE_API_BASE_URL=https://proctorai-staging.up.railway.app
@@ -140,10 +142,27 @@ VITE_API_BASE_URL=https://proctorai-staging.up.railway.app
 VITE_API_BASE_URL=
 ```
 
-When `VITE_API_BASE_URL` is empty, the frontend assumes same-origin (Vercel
-rewrites `/api/*` and `/socket.io/*` to the backend).
+When `VITE_API_BASE_URL` is empty, the frontend uses same-origin requests (Vite
+proxies them locally; Vercel rewrites them in production). Development also
+routes older `http://localhost:8000` / `http://127.0.0.1:8000` settings through
+Vite, preserving a custom API port. Production API addresses remain explicit.
+
+If sign-in briefly shows a dashboard and returns to login, check that the
+browser retains the app's httpOnly session cookie. Local setups should use
+`VITE_API_BASE_URL=`, `SESSION_COOKIE_SECURE=false`,
+`SESSION_COOKIE_SAMESITE=lax` and an empty `SESSION_COOKIE_DOMAIN`. Restart
+services after environment changes and use one website address throughout the
+Google round trip. Production requires its existing HTTPS cookie protections.
+Sign-in now checks `/api/auth/me` before opening a role portal, so a rejected
+cookie produces a sign-in error rather than a dashboard flash. During an OAuth
+callback, an old account cookie is not used to open its previous portal while
+the new sign-in is still being confirmed.
 
 ## Running tests
+
+Run the frontend session-cookie, role confirmation and local API routing checks
+with `npm run test:auth` (Node 24). These checks use test accounts and do not
+connect to Google or modify the configured database.
 
 The backend has a comprehensive `pytest` integration suite (including the camera integration checks) that
 covers: authentication (Google token verification, auto-provisioning, staff
