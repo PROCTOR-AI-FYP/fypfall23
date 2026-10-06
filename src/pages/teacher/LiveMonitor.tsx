@@ -1,4 +1,5 @@
 import { RoomCamera } from '@/components/monitoring/RoomCamera';
+import { DeviceCamera } from '@/components/monitoring/DeviceCamera';
 import { SessionSeatPlan } from '@/components/monitoring/SessionSeatPlan';
 import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState, useRef } from 'react';
@@ -24,6 +25,7 @@ function MonitorSession({id}:{id?:string}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [view, setView] = useState<'2d' | '3d'>('2d');
+  const [cameraMode,setCameraMode]=useState<'live'|'room'>('live');
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -103,8 +105,12 @@ function MonitorSession({id}:{id?:string}) {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main: Seat Grid */}
         <div className="lg:col-span-2">
-          {seatMap&&<><RoomCamera key={session.id} sessionId={session.id} active={session.status === 'In Progress'} seatMap={seatMap}/>
-            <SessionSeatPlan map={seatMap} detections={detections} perspective={view==='3d'} onReview={event=>navigate(`/teacher/alerts?alert=${event.id}`)}/></>}
+          <div className="flex flex-wrap items-center gap-2 mb-3" role="group" aria-label="Camera monitoring mode">
+            <Button variant={cameraMode==='live'?'primary':'secondary'} aria-pressed={cameraMode==='live'} onClick={()=>setCameraMode('live')}>Live camera</Button>
+            <Button variant={cameraMode==='room'?'primary':'secondary'} aria-pressed={cameraMode==='room'} onClick={()=>setCameraMode('room')}>Classroom mapping</Button>
+          </div>
+          {cameraMode==='live'?<DeviceCamera key={`live-${session.id}`} sessionId={session.id} active={session.status === 'In Progress'}/>:seatMap&&<RoomCamera key={`room-${session.id}`} sessionId={session.id} active={session.status === 'In Progress'} seatMap={seatMap}/>}
+          {seatMap&&<SessionSeatPlan map={seatMap} detections={detections} perspective={view==='3d'} onReview={event=>navigate(`/teacher/alerts?alert=${event.id}`)}/>}
 
         </div>
 
