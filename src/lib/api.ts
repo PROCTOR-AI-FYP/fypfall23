@@ -83,7 +83,10 @@ export async function request<T>(method: string, path: string, options: RequestO
   let response: Response;
   try {
     response = await fetch(url, { method, headers, body, credentials: 'include', signal: options.signal, keepalive: options.keepalive });
-  } catch {
+  } catch (reason) {
+    const name=(reason as {name?:string})?.name||options.signal?.reason?.name;
+    if(name==='TimeoutError')throw {message:'The server check took too long. Monitoring will retry.',code:'TIMEOUT',status:0};
+    if(name==='AbortError')throw {message:'The request was cancelled.',code:'ABORTED',status:0};
     throw { message: 'Could not reach the ProctorAI server. Check your connection.', code: 'NETWORK_ERROR', status: 0 };
   }
 

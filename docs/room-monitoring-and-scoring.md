@@ -46,6 +46,23 @@ camera images and the administrator's policy before creating evidence or cases.
 Object overlay tracking stays inside each student's mapped region and never
 supplies scores or ownership to the server.
 
+Object checks upload a frame once and receive an authenticated job identifier.
+The website then polls that same result; expensive inference is independent of
+any one HTTP response. There is one active model job globally and at most one
+job per camera, with no unbounded inference queue. Polling rechecks the account,
+exam and student assignment. Stop releases the camera and revokes result
+delivery. Already-running inference and evidence cleanup finish before the
+model slot is released; committed review evidence is preserved.
+
+During a temporary busy or network response, existing preview matches expire
+normally rather than disappearing immediately. Plain phone screens can match
+their visible edges and surrounding contrast. A removed object, invalid match,
+or expired observation cannot keep a live box. The **Latest object check** panel
+shows the exact captured frame and returned boxes with capture time and check
+delay. It remains distinct from the moving preview, so a rotated or moved phone
+does not hide the server's recognition or put an old box on a new position.
+These browser images are held in memory only and released on stop or replacement.
+
 Object inference first checks the whole room image. Every unambiguously
 attributed, verified object advances its own seat's confirmation in that sample;
 multiple seats can create separate cases in the same request. When the room

@@ -4,7 +4,9 @@ Text queries are fixed to the exam policy. Inference is local to this backend; i
 Uses the official, unmodified 900-query checkpoint; smaller image inputs
 reduce CPU cost without changing the learned query embeddings.
 """
-from pathlib import Path
+import logging
+import os
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import cv2
@@ -12,6 +14,88 @@ import torch
 
 PROMPT = 'a cell phone. a book. fabric.'
 CLASS_PHRASES = ('cell phone', 'book', 'fabric')
+
+
+def cpu_thread_budget(existing_threads, *, cpu_count=None, affinity_count=None, reader=None):
+    """Honor CPU allocation while preserving the existing eight-thread cap.
+
+    Inputs/readers can be supplied to test this without depending on the host.
+    Cgroup metadata is optional: Windows and inaccessible/incomplete mounts
+    safely fall back to the process affinity and reported processor count.
+    """
+    if cpu_count is None:
+        cpu_count = os.cpu_count() or 1
+    if affinity_count is None:
+        try:
+            affinity_count = len(os.sched_getaffinity(0))
+        except (AttributeError, OSError):
+            affinity_count = 0
+    limits = [8, max(1, int(existing_threads)), max(1, int(cpu_count))]
+    if affinity_count > 0:
+        limits.append(int(affinity_count))
+    if reader is None:
+        reader = lambda path: Path(path).read_text(encoding='ascii')
+    cache = {}
+
+    def read(path):
+        path = str(path)
+        if path not in cache:
+            try:
+                cache[path] = reader(path).strip()
+            except (OSError, ValueError, TypeError):
+                cache[path] = ''
+        return cache[path]
+
+    def quota_limit(quota, period):
+        try:
+            quota, period = int(quota), int(period)
+        except (TypeError, ValueError):
+            return None
+        # Negative/unlimited quotas and invalid/partial metadata impose no cap.
+        return max(1, (quota + period - 1) // period) if quota > 0 and period > 0 else None
+
+    memberships = {}
+    for line in read('/proc/self/cgroup').splitlines():
+        parts = line.split(':', 2)
+        if len(parts) != 3:
+            continue
+        _, controllers, relative = parts
+        path = PurePosixPath(relative)
+        if not relative.startswith('/') or '..' in path.parts or len(path.parts) > 17:
+            continue
+        if controllers == '':
+            memberships['v2'] = str(path).lstrip('/')
+        elif 'cpu' in controllers.split(','):
+            memberships['v1'] = str(path).lstrip('/')
+
+    def directories(root, kind):
+        # Process membership can be nested; the smallest ancestor allocation
+        # wins. Four common mounted roots and at most sixteen ancestors bound
+        # all reads, including containers whose mount hides the host prefix.
+        root = PurePosixPath(root)
+        candidate = root / memberships.get(kind, '')
+        result = []
+        for _ in range(17):
+            result.append(candidate)
+            if candidate == root:
+                break
+            candidate = candidate.parent
+        if root not in result:
+            result.append(root)
+        return result
+
+    for directory in directories('/sys/fs/cgroup', 'v2'):
+        fields = read(directory / 'cpu.max').split()
+        limit = quota_limit(*fields) if len(fields) == 2 else None
+        if limit is not None:
+            limits.append(limit)
+    for root in ('/sys/fs/cgroup/cpu', '/sys/fs/cgroup/cpu,cpuacct', '/sys/fs/cgroup/cpuacct,cpu'):
+        for directory in directories(root, 'v1'):
+            limit = quota_limit(read(directory / 'cpu.cfs_quota_us'), read(directory / 'cpu.cfs_period_us'))
+            if limit is not None:
+                limits.append(limit)
+    return max(1, min(limits))
+
 
 
 def decode_classes(outputs, token_spans, shape, threshold):
@@ -51,7 +135,9 @@ class GroundingModel:
         self.device = device
         self.book_threshold = book_threshold
         if device == 'cpu':
-            torch.set_num_threads(min(8, torch.get_num_threads()))
+            threads = cpu_thread_budget(torch.get_num_threads())
+            torch.set_num_threads(threads)
+            logging.getLogger('proctorai.grounding').info('Grounding DINO CPU inference uses %s PyTorch threads', threads)
         config = AutoConfig.from_pretrained(str(path), local_files_only=True)
         config.disable_custom_kernels = True  # portable CPU implementation; no compiler/download
         self.processor = AutoProcessor.from_pretrained(str(path), local_files_only=True)

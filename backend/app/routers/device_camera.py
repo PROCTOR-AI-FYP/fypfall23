@@ -1,6 +1,9 @@
 """Browser camera capture with the same cookie, role, seat and case permissions."""
+import asyncio
+from contextlib import asynccontextmanager
 import logging
 import time
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -11,11 +14,20 @@ from app.db import acquire_connection
 from app.deps import CurrentUser, resolve_session_user
 from app.models import Role, BehaviourType
 from app.routers.sessions import _visible_session
-from app.services.device_camera import MAX_IMAGE_BYTES, device_camera
+from app.services.device_camera import MAX_IMAGE_BYTES, decode_frame, device_camera
+from app.services.device_camera_jobs import object_jobs
 from app.services.detection import get_detection_config
 from app.services.room_camera import RoomStart, RoomState
 
-router = APIRouter(tags=['device camera'])
+@asynccontextmanager
+async def object_job_lifespan(app):
+    try:
+        yield
+    finally:
+        await object_jobs.close()
+
+
+router = APIRouter(tags=['device camera'], lifespan=object_job_lifespan)
 logger = logging.getLogger('proctorai.device-camera')
 async def authenticated(request: Request):
     async with acquire_connection() as conn:
@@ -113,6 +125,7 @@ async def check_start(user: CurrentUser = Depends(authenticated)):
 async def stop(run_id: UUID, user: CurrentUser = Depends(authenticated)):
     run = device_camera.get(str(run_id), user.user_id)
     device_camera.stop(run)
+    object_jobs.discard_run(run.run_id)
 
 async def camera_sample(request: Request):
     if request.headers.get('content-type', '').split(';')[0] != 'image/jpeg':
@@ -217,8 +230,12 @@ async def frame(run_id: UUID, request: Request,
             await verify_exam(conn, run.session_id, user, run.seat_number, run.student_id)
     data = await camera_sample(request)
     # Match head context to capture, not to a later pose after slow inference.
-    sampled_head_score = run.head_score if time.monotonic()-run.head_verified_at < 1 else 0.
-    head_epoch = run.head_epoch
+    captured_head = request.scope.get('proctorai_object_head_context')
+    if captured_head is None:
+        sampled_head_score = run.head_score if time.monotonic()-run.head_verified_at < 1 else 0.
+        head_epoch = run.head_epoch
+    else:
+        head_epoch, sampled_head_score = captured_head
     scene, events, objects, seconds = await device_camera.infer(run, data, frame_index)
     alert = None
     alert_error = None
@@ -277,10 +294,15 @@ async def room_frame(run_id: UUID, request: Request, frame_index: int = Query(ge
     run = device_camera.get(str(run_id),user.user_id)
     async with acquire_connection() as conn:
         await verify_room(conn,run,user)
-    now = time.monotonic()
-    head_epoch = run.head_epoch
-    sampled_heads = {seat:target.head_score for seat,target in run.room.seats.items()
-                     if now-target.head_verified_at<1}
+    captured_head = request.scope.get('proctorai_object_head_context')
+    if captured_head is None:
+        now = time.monotonic()
+        head_epoch = run.head_epoch
+        sampled_heads = {seat:target.head_score for seat,target in run.room.seats.items()
+                         if now-target.head_verified_at<1}
+    else:
+        head_epoch, captured_scores = captured_head
+        sampled_heads = dict(captured_scores)
     scene,target,events,objects,seconds,warning = await device_camera.infer(run,await camera_sample(request),frame_index)
     async with acquire_connection() as conn:
         current = await resolve_session_user(conn,request.cookies.get(settings.session_cookie_name))
@@ -314,3 +336,88 @@ async def room_frame(run_id: UUID, request: Request, frame_index: int = Query(ge
             'warning':warning,'checked_seat':None if whole_room else batches[0][0].seat_number,
             'mapped_seats':len(run.room.seats),'reviews':reviews,
             'review_observations':max(r['observations'] for r in reviews),'review_status':review_status}
+
+
+async def authorize_object_run(run, user, mode):
+    if mode == 'room':
+        async with acquire_connection() as conn:
+            await verify_room(conn, run, user)
+    elif run.room is not None:
+        raise HTTPException(409, 'Use room monitoring for this camera.')
+    elif run.session_id:
+        async with acquire_connection() as conn:
+            await verify_exam(conn, run.session_id, user, run.seat_number, run.student_id)
+
+
+def detached_sample(request, data, captured_head):
+    """Own the JPEG and cookie independently of the completed POST request."""
+    headers = [(b'content-type', b'image/jpeg')]
+    headers.extend((key, bytes(value)) for key, value in request.scope['headers']
+                   if key.lower() == b'cookie')
+    scope = {'type': 'http', 'method': 'POST', 'path': request.url.path,
+             'headers': headers, 'query_string': b'',
+             'proctorai_object_head_context': captured_head}
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if delivered:
+            return {'type': 'http.request', 'body': b'', 'more_body': False}
+        delivered = True
+        return {'type': 'http.request', 'body': data, 'more_body': False}
+
+    return Request(scope, receive)
+
+
+@router.post('/api/device-camera/{run_id}/object-jobs', status_code=202)
+async def start_object_job(run_id: UUID, request: Request,
+                           frame_index: int = Query(ge=0, le=2147483647),
+                           mode: Literal['single', 'room'] = Query('single'),
+                           user: CurrentUser = Depends(authenticated)):
+    enabled()
+    run = device_camera.get(str(run_id), user.user_id)
+    await authorize_object_run(run, user, mode)
+    object_jobs.ensure_available(run, frame_index)
+    if run.busy or device_camera.inference_lock.locked():
+        raise HTTPException(429, 'Object checker is busy; the camera preview continues.',
+                            headers={'Retry-After': '1'})
+    data = await camera_sample(request)
+    now = time.monotonic()
+    if mode == 'room':
+        captured_head = (run.head_epoch, tuple(
+            (seat, target.head_score) for seat, target in run.room.seats.items()
+            if now - target.head_verified_at < 1))
+    else:
+        captured_head = (run.head_epoch,
+                         run.head_score if now - run.head_verified_at < 1 else 0.)
+    # Reject malformed/oversized images before accepting background work.
+    await asyncio.to_thread(decode_frame, data)
+    sample = detached_sample(request, data, captured_head)
+
+    async def check():
+        current = await authenticated(sample)
+        if mode == 'room':
+            return await room_frame(run_id, sample, frame_index, current)
+        return await frame(run_id, sample, frame_index, False, current)
+
+    job = object_jobs.submit(run, frame_index, check, lambda: device_camera.stop(run))
+    return {'job_id': job.job_id, 'state': 'running'}
+
+
+@router.get('/api/device-camera/{run_id}/object-jobs/{job_id}')
+async def object_job_result(run_id: UUID, job_id: UUID,
+                            user: CurrentUser = Depends(authenticated)):
+    enabled()
+    run = device_camera.get(str(run_id), user.user_id)
+    try:
+        await authorize_object_run(run, user, 'room' if run.room is not None else 'single')
+    except HTTPException:
+        device_camera.stop(run)
+        object_jobs.discard_run(run.run_id)
+        raise
+    job = object_jobs.get(str(job_id), run, user.user_id)
+    if job.error is not None:
+        raise HTTPException(job.error.status_code, job.error.detail, headers=job.error.headers)
+    if job.result is not None:
+        return {'state': 'complete', 'result': job.result}
+    return {'state': 'running'}

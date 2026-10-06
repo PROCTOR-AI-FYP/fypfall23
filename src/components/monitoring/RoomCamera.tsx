@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/FormElements';
 import { ObjectOverlayTracker,type CameraObject } from '@/lib/vision/object-tracking';
 import type { RoomHeadState } from '@/lib/vision/room-head-pose';
+import { runObjectCheck } from '@/lib/vision/object-check';
+import { CheckedObjectFrame, type CheckedObjectSample } from './CheckedObjectFrame';
 
 type Region={seat_number:number;box:number[]};
 type Pose={seat_number:number;state:string;calibrated:boolean;calibrating:boolean;calibration_progress:number;
@@ -29,6 +31,7 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
   const [saved,setSaved]=useState(0),[ratio,setRatio]=useState(16/9),[imageSize,setImageSize]=useState([1600,900]);
   const [devices,setDevices]=useState<MediaDeviceInfo[]>([]),[device,setDevice]=useState('');
   const [starting,setStarting]=useState(false),[calibrating,setCalibrating]=useState(false);
+  const [checkedSample,setCheckedSample]=useState<CheckedObjectSample|null>(null);
   const assignments=seatMap.assignments.filter(s=>s.active);
   const roster=assignments.map(s=>`${s.seat_number}:${s.student_id}`).join('|');
   const stop=useCallback((message='')=>{
@@ -38,7 +41,7 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
       state.stream.getTracks().forEach(t=>t.stop());
       if(state.run)void request('POST',`/api/device-camera/${state.run}/stop`,{keepalive:true}).catch(()=>{});}
     if(video.current)video.current.srcObject=null;
-    if(mounted.current){setPhase('stopped');setPoses([]);setVerifiedPoses([]);setObjects([]);setHeadError('');setPreviewError('');setWorkerReady(false);setCalibrating(false);if(message)setError(message);}
+    if(mounted.current){setPhase('stopped');setPoses([]);setVerifiedPoses([]);setObjects([]);setCheckedSample(null);setHeadError('');setPreviewError('');setWorkerReady(false);setCalibrating(false);if(message)setError(message);}
   },[]);
   useEffect(()=>{
     mounted.current=true;
@@ -141,7 +144,7 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
         const failure=reason as {status?:number;message:string};
         if([401,403,404,409,410].includes(failure.status??0)){stop(failure.message);return;}
         const message=failure.status===429?'Verifier busy; retrying…':failure.message;
-        if(head){setHeadError(message);setVerifiedPoses([]);}else{setObjectMessage(message);state.trackers.clear();setObjects([]);}
+        if(head){setHeadError(message);setVerifiedPoses([]);}else setObjectMessage(message);
       };
       let headIndex=0,objectIndex=0;
       const heads=async()=>{
@@ -160,10 +163,12 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
       const checkObjects=async()=>{
         if(state.stopped)return;
         try{
+          const capturedAt=Date.now();
           const captured=await sample(true);
-          const result=await request<ObjectResult>('POST',`/api/device-camera/${state.run}/room/frame`,{
-            query:{frame_index:objectIndex++},rawBody:captured.jpeg,signal:AbortSignal.any([state.abort.signal,AbortSignal.timeout(45000)])});
+          const result=await runObjectCheck<ObjectResult>(request,state.run!,objectIndex++,captured.jpeg,{signal:state.abort.signal,mode:'room',
+            onProgress:progress=>{if(!state.stopped)setObjectMessage(`Checking classroom frame for phones and books · ${(progress.elapsedMs/1000).toFixed(0)}s`);}});
           if(state.stopped)return;
+          setCheckedSample(result.objects.length?{image:captured.jpeg,objects:result.objects,capturedAt,checkedAt:Date.now()}:null);
           const observed=regions.filter(r=>result.checked_seat===null||r.seat_number===result.checked_seat);
           for(const region of observed){let tracker=state.trackers.get(region.seat_number);if(!tracker){tracker=new ObjectOverlayTracker();state.trackers.set(region.seat_number,tracker);}
             tracker.set(result.objects.filter(o=>o.seat_number===region.seat_number),captured.reference!,performance.now(),Math.min(20000,Math.max(7000,(result.ai_seconds*1.5+2)*1000)));}
@@ -236,6 +241,7 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
       {phase==='running'&&<><div className="flex flex-wrap items-center gap-2"><Select aria-label="Highlight seat (all seats stay monitored)" value={inspect} onChange={e=>setInspect(e.target.value)}><option value="">All students</option>{assignments.map(s=><option key={s.seat_number} value={s.seat_number}>Highlight seat {s.seat_number} · {s.student_name}</option>)}</Select>
         <Button variant="secondary" disabled={calibrating} onClick={()=>void calibrate()}>{calibrating?'Setting neutral…':'Set neutral for all seats'}</Button></div>
         <p className="text-body-sm" role="status">{objectMessage}</p>
+        <CheckedObjectFrame sample={checkedSample}/>
         <p className="text-body-sm">{poses.filter(p=>p.calibrated).length}/{assignments.length} head poses calibrated. {verifiedPoses.filter(p=>p.calibrated).length}/{assignments.length} server-verified. {workerReady?'Live device head tracking active.':'Loading device head tracking…'} Ask students to face forward and hold still while setting neutral.</p></>}
       <section aria-label="Head pose for all students" className="space-y-2"><h3 className="text-heading">Head pose · all students</h3>
         <p className="text-label text-(--color-text-muted)">Live angles run on this device for every mapped seat. The server independently verifies sustained warnings before saving an alert.</p>

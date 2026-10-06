@@ -5,6 +5,8 @@ import { Select } from '@/components/ui/FormElements';
 import type { HeadState } from '@/lib/vision/head-pose';
 import { ObjectOverlayTracker, type CameraObject } from '@/lib/vision/object-tracking';
 import { useLiveRevision } from '@/lib/live-context';
+import { runObjectCheck } from '@/lib/vision/object-check';
+import { CheckedObjectFrame, type CheckedObjectSample } from './CheckedObjectFrame';
 
 type Seat={seat_number:number;student_name:string;registration_no:string};
 type SampleResult={objects:CameraObject[];ai_seconds:number;alert:unknown|null;alert_error:string|null;review_observations:number;detections?:ApiDetection[]};
@@ -41,6 +43,7 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
   const [headError,setHeadError]=useState(''),[seconds,setSeconds]=useState<number|null>(null),[saved,setSaved]=useState(false);
   const [verification,setVerification]=useState(''),[headVerificationError,setHeadVerificationError]=useState('');
   const [alertCount,setAlertCount]=useState(0);
+  const [checkedSample,setCheckedSample]=useState<CheckedObjectSample|null>(null);
   const receiveAlert=(result:{alert:unknown|null;alert_error:string|null;detections?:ApiDetection[]})=>{
     publishCommittedDetections(result.detections||[]);
     if(result.alert){setSaved(true);setAlertCount(value=>value+1);}
@@ -65,7 +68,7 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
     }
     if(video.current)video.current.srcObject=null;
     const context=overlay.current?.getContext('2d');if(context)context.clearRect(0,0,context.canvas.width,context.canvas.height);
-    if(mounted.current){setPhase('stopped');setHead(null);setObjects([]);setObjectMessage('');setVerification('');setHeadVerificationError('');if(message)setError(message);}
+    if(mounted.current){setPhase('stopped');setHead(null);setObjects([]);setCheckedSample(null);setObjectMessage('');setVerification('');setHeadVerificationError('');if(message)setError(message);}
   },[]);
   useEffect(()=>{
     mounted.current=true;
@@ -169,6 +172,7 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
       let index=0;
       const sample=async()=>{
         if(state.stopped)return;
+        const capturedAt=Date.now();
         const source=video.current!,sampleCanvas=document.createElement('canvas'),ratio=Math.min(1,1280/source.videoWidth,1200/source.videoHeight);
         sampleCanvas.width=Math.round(source.videoWidth*ratio);sampleCanvas.height=Math.round(source.videoHeight*ratio);
         sampleCanvas.getContext('2d')!.drawImage(source,0,0,sampleCanvas.width,sampleCanvas.height);
@@ -176,16 +180,21 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
         const context=reference.getContext('2d',{willReadFrequently:true})!;context.drawImage(sampleCanvas,0,0,reference.width,reference.height);
         const image=context.getImageData(0,0,reference.width,reference.height);
         try{
-          const result=await request<SampleResult>('POST',`/api/device-camera/${state.run}/frame`,{query:{frame_index:index++,head_sustained:state.head?.sustained??false},rawBody:await blob(sampleCanvas),signal:AbortSignal.any([state.controller.signal,AbortSignal.timeout(45000)])});
+          const jpeg=await blob(sampleCanvas);
+          const result=await runObjectCheck<SampleResult>(request,state.run!,index++,jpeg,{signal:state.controller.signal,
+            onProgress:progress=>{if(!state.stopped)setObjectMessage(`Checking camera frame for phones and books · ${(progress.elapsedMs/1000).toFixed(0)}s`);}});
           if(state.stopped)return;
           state.tracker.set(result.objects,image,performance.now(),Math.min(20000,Math.max(7000,(result.ai_seconds*1.5+2)*1000)));setObjects(result.objects);setSeconds(result.ai_seconds);
+          setCheckedSample(result.objects.length?{image:jpeg,objects:result.objects,capturedAt,checkedAt:Date.now()}:null);
           setObjectMessage(receiveAlert(result)||(result.objects.length&&sessionId?(result.alert?'Review alert saved.':result.review_observations>=3?'Repeated recognition verified; alerts repeat at most every 30 seconds.':result.review_observations?`Exam verification · ${result.review_observations}/3 recognitions · keep the object visible`:'Recognition visible; below the administrator’s review threshold.'):
-            result.objects.length?'':'Checking for phones and books…'));
+            result.objects.length?'':'No phone or book recognized in the latest frame.'));
         }catch(reason){
           if(state.stopped)return;
           const failure=reason as {status?:number;message:string};
           if([401,403,404,409,410].includes(failure.status??0)){stop(failure.message);return;}
-          setObjectMessage(failure.status===429?'Object checker busy; retrying…':failure.message);state.tracker.patches=[];setObjects([]);
+          setObjectMessage(failure.status===429?'Object checker busy; retrying…':failure.message);
+          // Transient server errors must not erase a still-matching, unexpired
+          // preview track or the previous checked sample. TTL bounds the boxes.
         }
         schedule(()=>void sample(),500);
       };
@@ -205,8 +214,9 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
     <div className="relative bg-black aspect-video"><video ref={video} muted playsInline autoPlay aria-label="Live device camera" className="w-full h-full object-contain" /><canvas ref={overlay} aria-label="Live head pose and object overlays" className="absolute inset-0 w-full h-full object-contain pointer-events-none" />{phase==='stopped'&&<div className="absolute inset-0 grid place-items-center p-6 text-center text-white/70">{active?'Start camera and allow access in your browser.':'Camera monitoring is available during an active exam.'}</div>}</div>
     <div className="p-4 space-y-3">
       {sessionId&&!seats.length&&<p className="text-body-sm text-(--color-warning)">Assign registered students to the exam seats before monitoring.</p>}
-      <p className="text-body-sm" aria-live="polite">{objects.map(value=>`${value.label==='phone'?'Phone':'Book'} · ${Math.round(value.confidence*100)}%${value.confirmed?'':' · checking'}`).join(' · ')||objectMessage||'Phone and book detection ready'}{seconds!==null&&<span className="ml-2 text-(--color-text-muted)">Object check: {seconds.toFixed(1)}s</span>}</p>
+      <p className="text-body-sm" aria-live="polite">{objects.length?'Last check: ':''}{objects.map(value=>`${value.label==='phone'?'Phone':'Book'} · ${Math.round(value.confidence*100)}%${value.confirmed?'':' · checking'}`).join(' · ')||objectMessage||'Phone and book detection ready'}{seconds!==null&&<span className="ml-2 text-(--color-text-muted)">Object check: {seconds.toFixed(1)}s</span>}</p>
       {!!objects.length&&objectMessage&&<p role="status" className="text-body-sm text-(--color-warning)">{objectMessage}</p>}
+      <CheckedObjectFrame sample={checkedSample}/>
       <div className="flex flex-wrap justify-between items-center gap-3"><p className={`text-body-sm ${head?.sustained?'text-(--color-error)':head?.violating?'text-(--color-warning)':''}`} aria-live="polite">{head?headLabels[head.state]||head.state:phase==='running'?'Loading head tracking…':'Set neutral after starting the camera.'}{head?.calibrating&&` ${Math.round(head.calibration_progress*100)}%`}</p><Button variant="secondary" disabled={phase!=='running'||!head||head.calibrating||!!headError} onClick={calibrate}>{head?.calibrated?'Recalibrate':'Set neutral pose'}</Button></div>
       {sessionId&&verification&&<p role="status" className="text-body-sm">{verification}</p>}
       {headVerificationError&&<p role="alert" className="text-body-sm text-(--color-error)">{headVerificationError}</p>}
