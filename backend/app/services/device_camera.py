@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -31,6 +32,10 @@ def object_signal_score(signal: str, model_confidence: float) -> float:
     threshold (.80). Raw neural confidence remains unchanged in camera overlays
     and evidence annotations. Admin sensitivity applies to this policy scale.
     """
+    if signal not in ('PHONE_DETECTED', 'UNAUTHORISED_OBJECT'):
+        raise ValueError('Unsupported object signal')
+    if not math.isfinite(model_confidence) or not 0 <= model_confidence <= 1:
+        raise ValueError('Invalid model confidence')
     floor = .50 if signal == 'PHONE_DETECTED' else .60
     if model_confidence <= floor:
         return round(.8 * max(0., model_confidence) / floor, 3)
@@ -76,11 +81,25 @@ class DeviceRun:
     head_calibrate: bool = False
     head_verified_at: float = 0.
     head_score: float = 0.
+    head_epoch: int = 0
+    observed_at: float | None = None
+    room: object | None = None
 
     def observe(self, events, now: float, config: DetectionConfig) -> dict[str, float] | None:
         """Three consecutive recognitions; allow actual hosted inference latency."""
         current = {}
+        if not math.isfinite(now):
+            raise ValueError('Invalid observation time')
+        if self.observed_at is not None and now <= self.observed_at:
+            self.histories.clear()
+        self.observed_at = now
         for event in events:
+            if event.type not in ('PHONE_DETECTED','UNAUTHORISED_OBJECT'):
+                continue
+            # The policy scale cannot promote weak/unverified neural candidates.
+            floor = .50 if event.type == 'PHONE_DETECTED' else .60
+            if not math.isfinite(event.confidence) or not floor <= event.confidence <= 1:
+                continue
             signal = BehaviourType(event.type)
             score = object_signal_score(event.type, event.confidence)
             if score >= config.thresholds[signal]:
@@ -95,10 +114,11 @@ class DeviceRun:
                             any(value < config.thresholds[BehaviourType(key[0])] for _,value in history)):
                 history.clear()
             history.append((now, confidence))
+            del history[:-20]
             while history and now - history[0][0] > 90:
                 history.pop(0)
             if len(history) >= 3 and now - history[0][0] >= 3:
-                active[key[0]] = sum(value for _, value in history) / len(history)
+                active[key[0]] = max(active.get(key[0], 0.), sum(value for _, value in history) / len(history))
         return active or None
 
 
@@ -136,6 +156,12 @@ class DeviceCameraService:
     def stop(self, run):
         run.stopped = True
         self.runs.pop(run.run_id, None)
+        if run.room is not None:
+            for target in run.room.seats.values():
+                target.stopped = True
+        if run.room is not None and not run.head_busy:
+            run.room.close()
+            run.room = None
         if run.head is not None and not run.head_busy:
             run.head.close()
             run.head = None
@@ -144,14 +170,18 @@ class DeviceCameraService:
         from pathlib import Path
         from app.vision.head_pose import HeadPoseDetector, MediaPipePoseSource
         frame = decode_frame(data)
+        path = Path(settings.device_camera_head_model_path)
+        if not path.exists() and not settings.is_production:
+            path = Path(__file__).resolve().parents[3] / 'ai-engine/models/face_landmarker.task'
+        calibrate = run.head_calibrate
+        run.head_calibrate = False
+        if run.room is not None:
+            states = run.room.heads(frame,path,calibrate)
+            return frame, states
         if run.head is None:
-            path = Path(settings.device_camera_head_model_path)
-            if not path.exists() and not settings.is_production:
-                path = Path(__file__).resolve().parents[3] / 'ai-engine/models/face_landmarker.task'
             run.head = HeadPoseDetector(source=MediaPipePoseSource(path),max_gap=2.,reference_loss_seconds=4.)
-        if run.head_calibrate:
+        if calibrate:
             run.head.begin_calibration()
-            run.head_calibrate = False
         run.head.process_frame(frame)
         state = run.head.status()
         run.head_verified_at = time.monotonic()
@@ -165,6 +195,7 @@ class DeviceCameraService:
             raise HTTPException(409,'Head sample is out of order.')
         run.head_busy = True
         run.head_index = frame_index
+        epoch = run.head_epoch
         try:
             async with self.head_slots:
                 task = asyncio.create_task(asyncio.to_thread(self._head,run,data))
@@ -175,31 +206,36 @@ class DeviceCameraService:
                     raise
             if run.stopped:
                 raise HTTPException(410,'Camera was stopped.')
+            if epoch != run.head_epoch:
+                run.head_score = 0.
+                if run.room is not None:
+                    for target in run.room.seats.values():target.head_score = 0.
+                raise HTTPException(429,'Neutral calibration changed during verification; retrying.')
             return result
         except HTTPException:
             raise
         except Exception as exc:
             run.head_score = 0.
+            if run.room is not None:
+                for target in run.room.seats.values():
+                    target.head_score = 0.
             logger.exception('Head verification failed')
             raise HTTPException(503,'Head verification is unavailable; no head alert was saved.') from exc
         finally:
             run.head_busy = False
+            if run.stopped and run.room is not None:
+                run.room.close()
+                run.room = None
             if run.stopped and run.head is not None:
                 run.head.close()
                 run.head = None
 
     def _infer(self, run, data):
-        from app.vision.grounding import GroundingModel
         from app.vision.phone import PhoneDetector
         frame = decode_frame(data)
-        if self.model is None:
-            from pathlib import Path
-            model_path = Path(settings.device_camera_model_path)
-            if not model_path.exists() and settings.app_env != 'production':
-                local = Path(__file__).resolve().parents[3] / 'ai-engine/models/grounding-dino-tiny'
-                if local.exists():
-                    model_path = local
-            self.model = GroundingModel(model_path)
+        self._load_model()
+        if run.room is not None:
+            return (frame, *run.room.objects(frame,self.model))
         if run.detector is None:
             run.detector = PhoneDetector(model=self.model, use_tiling=False, full_imgsz=640,
                                          min_hits=1, track_ttl=90)
@@ -215,6 +251,17 @@ class DeviceCameraService:
                                 track_id=track.id, confirmed=track.id in confirmed,
                                 box=[v / (width if i % 2 == 0 else height) for i, v in enumerate(detection.box)]))
         return frame, events, objects, run.detector.last_inference_seconds
+
+    def _load_model(self):
+        from app.vision.grounding import GroundingModel
+        if self.model is None:
+            from pathlib import Path
+            model_path = Path(settings.device_camera_model_path)
+            if not model_path.exists() and settings.app_env != 'production':
+                local = Path(__file__).resolve().parents[3] / 'ai-engine/models/grounding-dino-tiny'
+                if local.exists():
+                    model_path = local
+            self.model = GroundingModel(model_path)
 
     async def infer(self, run, data, frame_index):
         if run.busy or self.inference_lock.locked():
@@ -244,30 +291,46 @@ class DeviceCameraService:
         finally:
             run.busy = False
 
-    async def persist(self, run, frame, scores, config, conn, *, head_only=False):
+    async def persist(self, run, frame, scores, config, conn, *, head_only=False, evidence=None):
         from app.redis_client import get_redis
         from app.services.detection import cooldown_key
         from app.services.storage import get_storage
         from app.routers.internal import save_detection
         import cv2
+        if run.stopped:
+            raise HTTPException(410, 'Camera was stopped.')
+        scores = {k:v for k,v in scores.items() if v >= config.thresholds[BehaviourType(k)]}
         score = config.composite({BehaviourType(k): v for k, v in scores.items()})
         if score < .75:
             return None
-        signature = ','.join(sorted(scores))
-        key = cooldown_key(run.session_id, run.seat_number) + ':device:' + signature
+        signals = sorted(scores)
+        keys = [cooldown_key(run.session_id, run.seat_number) + ':device:' + signal for signal in signals]
         claim = str(uuid.uuid4())
-        if not await get_redis().set(key, claim, nx=True, ex=30):
+        # Claim per signal in one atomic call. A combined object/head result
+        # cannot bypass the head-only cooldown and create duplicate head cases.
+        won = await get_redis().eval("local won={} for i,key in ipairs(KEYS) do if redis.call('SET',key,ARGV[1],'NX','EX',30) then table.insert(won,i) end end return won", len(keys), *keys, claim)
+        if not won:
+            return None
+        claimed_keys = [keys[i-1] for i in won]
+        scores = {signals[i-1]:scores[signals[i-1]] for i in won}
+        score = config.composite({BehaviourType(k):v for k,v in scores.items()})
+        async def release():
+            await get_redis().eval("for _,key in ipairs(KEYS) do if redis.call('GET',key)==ARGV[1] then redis.call('DEL',key) end end return 1", len(claimed_keys), *claimed_keys, claim)
+        if score < .75:
+            await release()
             return None
         path = f'{settings.supabase_snapshot_bucket}/{run.session_id}/{uuid.uuid4()}.jpg'
         uploaded = False
         try:
             storage = get_storage()
-            annotated = run.head.annotate_frame(frame) if head_only else run.detector.annotate_frame(frame)
+            annotated = evidence if evidence is not None else (run.head.annotate_frame(frame) if head_only else run.detector.annotate_frame(frame))
             encoded, jpeg = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if not encoded:
                 raise RuntimeError('Evidence encoding failed')
             await storage.upload(path, jpeg.tobytes(), 'image/jpeg')
             uploaded = True
+            if run.stopped:
+                raise HTTPException(410, 'Camera was stopped.')
             body = DetectionEventIn(session_id=run.session_id, seat_number=run.seat_number,
                                    behaviour_types=list(scores), per_signal=scores, composite_score=score,
                                    snapshot_path=path, detected_at=datetime.now(timezone.utc))
@@ -275,8 +338,11 @@ class DeviceCameraService:
                                         expected_invigilator_id=run.owner_id)
         except Exception:
             if uploaded:
-                await storage.delete([path])
-            await get_redis().eval("if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) end return 0", 1, key, claim)
+                try:
+                    await storage.delete([path])
+                except Exception:
+                    logger.exception('Could not remove an uncommitted camera snapshot')
+            await release()
             raise
 
 

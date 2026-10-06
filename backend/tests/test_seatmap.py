@@ -45,7 +45,7 @@ async def test_seatmap_resolves_activated_rejects_unregistered_and_unactivated(
 
     token = await login(client, CONTROLLER_EMAIL)
     files = {"file": ("seatmap.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")}
-    resp = await client.post(f"/api/sessions/{SCHEDULED_SESSION_ID}/seatmap", headers=auth(token), files=files)
+    resp = await client.post('/api/seatmap/preview', headers=auth(token), files=files)
     assert resp.status_code == 200, resp.text
     body = resp.json()
 
@@ -56,11 +56,13 @@ async def test_seatmap_resolves_activated_rejects_unregistered_and_unactivated(
     assert body["resolved_count"] == 1
     assert body["rejected_count"] == 2
 
+    upload = await client.post(f'/api/sessions/{SCHEDULED_SESSION_ID}/seatmap',headers=auth(token),files=_csv(csv_content))
+    assert upload.status_code == 409
     rows_in_db = await admin_conn.fetch("SELECT seat_number FROM seat_assignments WHERE session_id = $1", SCHEDULED_SESSION_ID)
-    assert {r["seat_number"] for r in rows_in_db} == {20}  # only the resolved row was written
+    assert not rows_in_db  # unresolved uploads cannot erase or partially replace a map
     assert await admin_conn.fetchval(
         "SELECT count(*) FROM audit_log WHERE action = 'seatmap_upload' AND target = $1", SCHEDULED_SESSION_ID
-    ) == 1
+    ) == 0
 
 
 def _csv(body: str) -> dict[str, tuple[str, io.BytesIO, str]]:

@@ -310,3 +310,17 @@ def test_recovery_rejects_invalid_face_transform():
     source=queued_pose_source([face_result(count=0),bad])
     result=source.estimate(np.zeros((480,640,3),np.uint8),1.)
     assert result.reason=='unreliable_face' and result.rotation is None
+
+
+def test_room_estimates_all_faces_without_using_order_as_identity():
+    result=face_result(count=2)
+    source=queued_pose_source([result]);source.max_dimension=1600
+    observations=source.estimate_all(np.zeros((900,1600,3),np.uint8),1.)
+    assert len(observations)==2 and all(o.rotation is not None for o in observations)
+    assert all(o.box is not None for o in observations)
+    assert len(source.landmarker.calls)==1
+
+
+@pytest.mark.parametrize('value',[float('nan'),float('inf')])
+def test_nonfinite_sustained_timing_rejected(value):
+    with pytest.raises(ValueError):HeadPoseDetector(sustained_seconds=value,source=Source())

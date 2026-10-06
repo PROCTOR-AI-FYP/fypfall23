@@ -7,6 +7,7 @@ POST /internal/detections  a confirmed alert with its snapshot -> case, live
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 import asyncpg
@@ -180,32 +181,38 @@ async def save_detection(body: DetectionEventIn, conn: asyncpg.Connection, *, ex
     case = row_to_case(case_row)
     detected_at = body.detected_at.isoformat()
     # Same fields as GET /api/detections returns, so the UI handles both alike.
-    await emit_detection(
-        session_id,
-        meta.invigilator_id,
-        {
-            "id": str(detection_id),
-            "case_id": case.id,
-            "reference_no": case.reference_no,
-            "session_id": session_id,
-            "seat_number": body.seat_number,
-            "student_id": case.student_id,
-            "student_name": student_name,
-            "behaviour_types": behaviour_values,
-            "per_signal": per_signal,
-            "composite_score": body.composite_score,
-            "detected_at": detected_at,
-            "status": AlertStatus.NEW.value,
-        },
-    )
+    try:
+        await emit_detection(
+            session_id,
+            meta.invigilator_id,
+            {
+                "id": str(detection_id),
+                "case_id": case.id,
+                "reference_no": case.reference_no,
+                "session_id": session_id,
+                "seat_number": body.seat_number,
+                "student_id": case.student_id,
+                "student_name": student_name,
+                "behaviour_types": behaviour_values,
+                "per_signal": per_signal,
+                "composite_score": body.composite_score,
+                "detected_at": detected_at,
+                "status": AlertStatus.NEW.value,
+            },
+        )
+    except Exception:
+        logging.getLogger('proctorai.detection').exception('Case %s committed; socket delivery failed',case.id)
     # Devices get no student identity, only what an in-room indicator needs.
-    await mqtt_service.publish(
-        alert_topic(meta.room),
-        {
-            "reference_no": case.reference_no,
-            "seat_number": body.seat_number,
-            "behaviour_types": behaviour_values,
-            "detected_at": detected_at,
-        },
-    )
+    try:
+        await mqtt_service.publish(
+            alert_topic(meta.room),
+            {
+                "reference_no": case.reference_no,
+                "seat_number": body.seat_number,
+                "behaviour_types": behaviour_values,
+                "detected_at": detected_at,
+            },
+        )
+    except Exception:
+        logging.getLogger('proctorai.detection').exception('Case %s committed; room indicator delivery failed',case.id)
     return case

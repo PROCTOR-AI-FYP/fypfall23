@@ -589,6 +589,15 @@ export async function getClassroom(id: string): Promise<ApiResponse<Classroom>> 
   return { data: toClassroom(await request<ApiClassroom>('GET', `/api/classrooms/${id}`)) };
 }
 
+export interface SessionSeatMap {
+  capacity:number;
+  assignments:{seat_number:number;student_id:string|null;registration_no:string;student_name:string|null;active:boolean}[];
+  polygons:{seat_number:number;vertices:{x:number;y:number}[]}[];
+}
+export function getSessionSeatMap(id:string) {
+  return request<SessionSeatMap>('GET',`/api/sessions/${id}/seatmap`);
+}
+
 function classroomToApi(data: Partial<Classroom>): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   if (data.name !== undefined) body.name = data.name;

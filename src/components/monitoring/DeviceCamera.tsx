@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/FormElements';
 import type { HeadState } from '@/lib/vision/head-pose';
 import { ObjectOverlayTracker, type CameraObject } from '@/lib/vision/object-tracking';
+import { useLiveRevision } from '@/lib/live-context';
 
 type Seat={seat_number:number;student_name:string;registration_no:string};
 type SampleResult={objects:CameraObject[];ai_seconds:number;alert:unknown|null;alert_error:string|null;review_observations:number};
@@ -29,6 +30,7 @@ function cameraError(reason:unknown) {
 function blob(canvas:HTMLCanvasElement){return new Promise<Blob>((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(Error('Could not capture camera sample.')),'image/jpeg',.85));}
 
 export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:boolean}) {
+  const revision=useLiveRevision();
   const video=useRef<HTMLVideoElement>(null),overlay=useRef<HTMLCanvasElement>(null);
   const capture=useRef<Capture|null>(null),mounted=useRef(true),starting=useRef(false);
   const [seats,setSeats]=useState<Seat[]>([]),[seat,setSeat]=useState('');
@@ -77,8 +79,9 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
     if(!sessionId)return;
     let cancelled=false;
     request<Seat[]>('GET',`/api/sessions/${sessionId}/device-camera/seats`).then(value=>{if(!cancelled)setSeats(value);}).catch(reason=>{if(!cancelled)setError(reason.message);});
-    return()=>{cancelled=true;stop();};
-  },[sessionId,stop]);
+    return()=>{cancelled=true;};
+  },[sessionId,revision]);
+  useEffect(()=>()=>stop(),[sessionId,stop]);
 
   const start=async()=>{
     if(starting.current||capture.current)return;

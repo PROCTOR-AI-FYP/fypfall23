@@ -255,6 +255,69 @@ async def test_unavailable_storage_reports_failure_and_releases_retry_cooldown(c
     assert await admin_conn.fetchval('SELECT count(*) FROM cases WHERE session_id=$1::uuid',active_session)==0
 
 
+async def test_combined_scores_cannot_bypass_per_signal_cooldowns(client,admin_conn,active_session,device,monkeypatch):
+    from app.services import storage
+    from app.db import acquire_connection
+    class Storage:
+        async def upload(self,*args):pass
+        async def delete(self,*args):pass
+    monkeypatch.setattr(storage,'get_storage',lambda:Storage())
+    headers=auth(await login(client,TEACHER_EMAIL))
+    result=await client.post(f'/api/sessions/{active_session}/device-camera/start',headers=headers,json={'seat_number':14})
+    run=device.runs[result.json()['run_id']]
+    run.detector=SimpleNamespace(annotate_frame=lambda f:f)
+    async with acquire_connection() as conn:
+        first=await device.persist(run,service.decode_frame(jpeg()),{'PHONE_DETECTED':.9,'HEAD_POSE_VIOLATION':.85},DetectionConfig(),conn)
+        assert first
+        assert await device.persist(run,service.decode_frame(jpeg()),{'HEAD_POSE_VIOLATION':.85},DetectionConfig(),conn) is None
+        second=await device.persist(run,service.decode_frame(jpeg()),{'PHONE_DETECTED':.9,'UNAUTHORISED_OBJECT':.9},DetectionConfig(),conn)
+        assert second
+        signals=await admin_conn.fetchval('SELECT behaviour_types FROM detection_events WHERE id=(SELECT detection_event_id FROM cases WHERE id=$1::uuid)',second.id)
+        assert list(signals)==['UNAUTHORISED_OBJECT']
+    assert await admin_conn.fetchval('SELECT count(*) FROM cases WHERE session_id=$1::uuid',active_session)==2
+
+
+async def test_socket_failure_after_commit_keeps_evidence_and_cooldown(client,admin_conn,active_session,device,monkeypatch):
+    from app.services import storage
+    from app.routers import internal
+    from app.db import acquire_connection
+    saved={}
+    class Storage:
+        async def upload(self,path,data,kind):saved[path]=data
+        async def delete(self,paths):
+            for path in paths:saved.pop(path,None)
+    async def socket_failure(*args):raise RuntimeError('Fixture disconnected socket')
+    monkeypatch.setattr(storage,'get_storage',lambda:Storage())
+    monkeypatch.setattr(internal,'emit_detection',socket_failure)
+    headers=auth(await login(client,TEACHER_EMAIL))
+    result=await client.post(f'/api/sessions/{active_session}/device-camera/start',headers=headers,json={'seat_number':14})
+    run=device.runs[result.json()['run_id']];run.detector=SimpleNamespace(annotate_frame=lambda f:f)
+    async with acquire_connection() as conn:
+        case=await device.persist(run,service.decode_frame(jpeg()),{'PHONE_DETECTED':.9},DetectionConfig(),conn)
+        assert case
+        assert await device.persist(run,service.decode_frame(jpeg()),{'PHONE_DETECTED':.9},DetectionConfig(),conn) is None
+    path=await admin_conn.fetchval('SELECT snapshot_path FROM detection_events WHERE session_id=$1::uuid',active_session)
+    assert path in saved
+
+
+async def test_recalibration_during_inference_cannot_publish_an_old_head_warning(monkeypatch):
+    import threading
+    from fastapi import HTTPException
+    manager=service.DeviceCameraService();run=manager.start('teacher')
+    entered=threading.Event();finish=threading.Event()
+    def pending(target,data):
+        target.head_calibrate=False;entered.set();finish.wait(5)
+        target.head_score=.85
+        return service.decode_frame(data),{'sustained':True}
+    monkeypatch.setattr(manager,'_head',pending)
+    task=asyncio.create_task(manager.verify_head(run,jpeg(),0))
+    assert await asyncio.to_thread(entered.wait,5)
+    run.head_calibrate=True;run.head_epoch+=1;finish.set()
+    with pytest.raises(HTTPException) as error:await task
+    assert error.value.status_code==429
+    assert run.head_score==0 and run.head_calibrate
+
+
 @pytest.mark.parametrize('data',[b'',b'not an image',b'x'*(service.MAX_IMAGE_BYTES+1)],ids=['empty','invalid','oversized'])
 def test_image_decoder_rejects_invalid_or_oversized_samples(data):
     from fastapi import HTTPException

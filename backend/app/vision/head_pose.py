@@ -75,7 +75,7 @@ def mean_rotation(rotations):
 
 
 class MediaPipePoseSource:
-    def __init__(self, model_path=MODEL_PATH):
+    def __init__(self, model_path=MODEL_PATH, *, num_faces=2, max_dimension=640, image_mode=False):
         import mediapipe as mp
         path = Path(model_path)
         if not path.is_file():
@@ -83,12 +83,72 @@ class MediaPipePoseSource:
         self.mp = mp
         options = mp.tasks.vision.FaceLandmarkerOptions(
             base_options=mp.tasks.BaseOptions(model_asset_path=str(path)),
-            running_mode=mp.tasks.vision.RunningMode.VIDEO, num_faces=2,
+            running_mode=mp.tasks.vision.RunningMode.IMAGE if image_mode else mp.tasks.vision.RunningMode.VIDEO, num_faces=num_faces,
             min_face_detection_confidence=.6, min_face_presence_confidence=.6,
             min_tracking_confidence=.6, output_facial_transformation_matrixes=True)
         self.landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
         self._last_ms = -1
         self._mirrored = False
+        self.max_dimension = max_dimension
+        self.image_mode = image_mode
+
+    def estimate_regions(self, frame, regions, timestamp):
+        """Native seat crops let the short-range face model see room faces.
+
+        IMAGE mode prevents VIDEO tracking from following a face from one seat
+        crop into the next. Rotation/timing/calibration remain independent in
+        the caller. Crop size gates use captured pixels, never upscaled pixels.
+        """
+        if not self.image_mode:
+            raise ValueError('Region estimation requires independent IMAGE inference')
+        h,w = frame.shape[:2]
+        observations = []
+        for bounds in regions:
+            x1,y1,x2,y2 = [round(v*(h if i%2 else w)) for i,v in enumerate(bounds)]
+            crop = frame[y1:y2,x1:x2]
+            if min(crop.shape[:2])<64:
+                observations.append(FaceObservation(None,(x1,y1,x2,y2),'face_too_small'))
+                continue
+            for observation in self.estimate_all(crop,timestamp):
+                if observation.box is None:
+                    continue
+                a,b,c,d = observation.box
+                box = (a+x1,b+y1,c+x1,d+y1)
+                if a<=2 or b<=2 or c>=crop.shape[1]-2 or d>=crop.shape[0]-2:
+                    observations.append(FaceObservation(None,box,'unreliable_face'))
+                else:
+                    observations.append(FaceObservation(observation.rotation,box,observation.reason))
+        return observations
+
+    def estimate_all(self, frame, timestamp):
+        """Room observations carry spatial boxes; list position is never identity.
+
+        Keep native image detail up to 1600 pixels. Do not upscale a tiny face
+        and then call it reliable; size gates use actual captured pixels.
+        """
+        h, w = frame.shape[:2]
+        ratio = min(1., self.max_dimension / max(h, w))
+        small = cv2.resize(frame, (round(w*ratio), round(h*ratio))) if ratio < 1 else frame
+        result = self._detect(small, timestamp, False)
+        observations = []
+        for index, landmarks in enumerate(result.face_landmarks):
+            points = np.array([(p.x, p.y) for p in landmarks[:468]])
+            if not np.isfinite(points).all():
+                continue
+            x1,y1 = points.min(axis=0)
+            x2,y2 = points.max(axis=0)
+            box = (x1*w,y1*h,x2*w,y2*h)
+            if (x2-x1)*small.shape[1] < 60 or (y2-y1)*small.shape[0] < 70:
+                observations.append(FaceObservation(None, box, 'face_too_small'))
+                continue
+            try:
+                if x1<0 or y1<0 or x2>1 or y2>1:
+                    raise ValueError('Face outside image')
+                rotation = rotation_from_matrix(result.facial_transformation_matrixes[index])
+                observations.append(FaceObservation(rotation, box))
+            except (ValueError, IndexError):
+                observations.append(FaceObservation(None, box, 'unreliable_face'))
+        return observations
 
     def _detect(self, small, timestamp, mirrored):
         # A failed view may be easier for the model after horizontal reflection.
@@ -97,6 +157,8 @@ class MediaPipePoseSource:
         view = cv2.flip(small, 1) if mirrored else small
         image = self.mp.Image(image_format=self.mp.ImageFormat.SRGB,
                               data=cv2.cvtColor(view,cv2.COLOR_BGR2RGB))
+        if getattr(self,'image_mode',False):
+            return self.landmarker.detect(image)
         ms = max(self._last_ms+1,round(timestamp*1000))
         self._last_ms = ms
         return self.landmarker.detect_for_video(image,ms)
@@ -147,7 +209,8 @@ class HeadPoseDetector:
                  sustained_seconds=SUSTAINED_SECONDS, debug=False, *, source=None,
                  calibration_seconds=2., smoothing_seconds=.12, max_gap=.5,
                  reference_loss_seconds=2.):
-        if not 0<yaw_threshold<85 or not -85<pitch_threshold<0 or sustained_seconds<=0:
+        if (not all(math.isfinite(v) for v in (yaw_threshold,pitch_threshold,sustained_seconds))
+                or not 0<yaw_threshold<85 or not -85<pitch_threshold<0 or sustained_seconds<=0):
             raise ValueError('Invalid head-pose thresholds')
         if (not all(math.isfinite(value) for value in
                     (calibration_seconds,smoothing_seconds,max_gap,reference_loss_seconds))
@@ -251,7 +314,7 @@ class HeadPoseDetector:
                 self._calibration_start = now
             self._calibration.append(rotation)
             elapsed = now-self._calibration_start
-            self._calibration_progress = min(1.,elapsed/self.calibration_seconds)
+            self._calibration_progress = min(1.,elapsed/self.calibration_seconds,len(self._calibration)/8)
             self._reason = 'calibrating'
             if elapsed<self.calibration_seconds or len(self._calibration)<8:
                 return None

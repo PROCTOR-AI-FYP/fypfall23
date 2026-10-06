@@ -3,7 +3,8 @@
 Key scheme: buffer:{session_id}:{seat}:{signal} is a Redis list holding the
 most recent BUFFER_WINDOW_FRAMES scores (LPUSH + LTRIM). A whole frame's
 buffer writes and read-backs go out as one pipelined round trip, and the
-cooldown claims for any triggered seats as a second one. Pipelining cuts
+cooldown claims for any triggered seats as a second one. Atomic per-buffer
+updates reset interrupted streams and reject duplicate indices. Pipelining cuts
 round trips, not billed commands; see app/redis_client.py for the Upstash
 cost analysis.
 """
@@ -51,9 +52,15 @@ class DetectionConfig:
     weights: dict[BehaviourType, float] = field(default_factory=dict)
 
     def composite(self, signals: dict[BehaviourType, float]) -> float:
+        if not signals:
+            return 0.0
+        if any(not math.isfinite(score) or not 0 <= score <= 1 for score in signals.values()):
+            raise ValueError('Signal scores must be finite values between zero and one.')
+        if any(not math.isfinite(weight) or weight < 0 for weight in self.weights.values()):
+            raise ValueError('Signal weights must be finite and non-negative.')
         total_weight = sum(self.weights.get(signal, 0.0) for signal in signals)
         if total_weight <= 0:
-            return max(signals.values())
+            return 0.0 if self.weights else max(signals.values())
         return round(sum(score * self.weights.get(signal, 0.0) for signal, score in signals.items()) / total_weight, 3)
 
 
@@ -106,25 +113,41 @@ async def record_frame(
     session_id: str, frame_index: int, seats: list[SeatSignals]
 ) -> dict[tuple[int, BehaviourType], list[float]]:
     """Append one frame's scores to every buffer and return the updated windows."""
-    entries = [(seat.seat_number, signal, score) for seat in seats for signal, score in seat.signals.items()]
+    # A missing signal is an observed absence, not permission to retain an old
+    # positive window across frames. Each observed seat advances every signal.
+    entries = [(seat.seat_number, signal, seat.signals.get(signal, 0.0))
+               for seat in seats for signal in BehaviourType]
+    if any(not math.isfinite(score) or not 0 <= score <= 1 for _, _, score in entries):
+        raise ValueError('Signal scores must be finite values between zero and one.')
     if not entries:
         return {}
 
-    refresh_ttl = frame_index % BUFFER_TTL_REFRESH_EVERY_N_FRAMES == 0
     pipe = get_redis().pipeline(transaction=False)
+    now = time.monotonic()
+    script = '''
+        local last=redis.call('GET',KEYS[2])
+        if last then
+            local index,stamp=string.match(last,'([^:]+):(.+)')
+            local gap=tonumber(ARGV[3])-tonumber(stamp)
+            if gap>=0 and gap<=2 and tonumber(ARGV[2])<=tonumber(index) then return {} end
+            if gap<0 or gap>2 or tonumber(ARGV[2])~=tonumber(index)+1 then redis.call('DEL',KEYS[1]) end
+        else
+            redis.call('DEL',KEYS[1])
+        end
+        redis.call('SET',KEYS[2],ARGV[2]..':'..ARGV[3],'EX',ARGV[5])
+        redis.call('LPUSH',KEYS[1],ARGV[1])
+        redis.call('LTRIM',KEYS[1],0,tonumber(ARGV[4])-1)
+        redis.call('EXPIRE',KEYS[1],ARGV[5])
+        return redis.call('LRANGE',KEYS[1],0,tonumber(ARGV[4])-1)
+    '''
     for seat_number, signal, score in entries:
         key = buffer_key(session_id, seat_number, signal)
-        pipe.lpush(key, f"{score:.3f}")
-        pipe.ltrim(key, 0, BUFFER_WINDOW_FRAMES - 1)
-        if refresh_ttl:
-            pipe.expire(key, BUFFER_TTL_SECONDS)
-        pipe.lrange(key, 0, BUFFER_WINDOW_FRAMES - 1)
+        pipe.eval(script,2,key,key+':frame',f'{score:.3f}',frame_index,now,BUFFER_WINDOW_FRAMES,BUFFER_TTL_SECONDS)
     results = await pipe.execute()
 
-    commands_per_entry = 4 if refresh_ttl else 3
     windows: dict[tuple[int, BehaviourType], list[float]] = {}
     for index, (seat_number, signal, _) in enumerate(entries):
-        window = results[(index + 1) * commands_per_entry - 1]
+        window = results[index]
         windows[(seat_number, signal)] = [float(value) for value in window]
     return windows
 
@@ -138,9 +161,13 @@ def evaluate_windows(
     for (seat_number, signal), window in windows.items():
         if len(window) < BUFFER_WINDOW_FRAMES:
             continue
-        over_threshold = sum(1 for value in window if value >= config.thresholds[signal])
-        if over_threshold >= TRIGGER_MIN_FRAMES:
-            per_seat[seat_number][signal] = round(sum(window) / len(window), 3)
+        if any(not math.isfinite(value) or not 0 <= value <= 1 for value in window):
+            continue
+        qualifying = [value for value in window if value >= config.thresholds[signal]]
+        if len(qualifying) >= TRIGGER_MIN_FRAMES:
+            # Persistence and signal strength are separate: absent frames must
+            # not dilute an already qualified .80 recognition below .75.
+            per_seat[seat_number][signal] = round(sum(qualifying) / len(qualifying), 3)
 
     return [
         TriggeredSeat(

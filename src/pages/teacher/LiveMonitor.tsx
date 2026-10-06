@@ -1,6 +1,7 @@
-import { DeviceCamera as SessionCamera } from '@/components/monitoring/DeviceCamera';
+import { RoomCamera } from '@/components/monitoring/RoomCamera';
+import { SessionSeatPlan } from '@/components/monitoring/SessionSeatPlan';
 import { useLiveRevision } from '@/lib/live-context';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams,useNavigate } from 'react-router-dom';
 import { Grid3x3, Box, StopCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -10,42 +11,37 @@ import * as api from '@/lib/api';
 import { type ExamSession, type DetectionEvent } from '@/lib/types';
 
 export function LiveMonitor() {
+  const { id } = useParams<{ id: string }>();
+  return <MonitorSession key={id} id={id}/>;
+}
+
+function MonitorSession({id}:{id?:string}) {
   const liveRevision = useLiveRevision();
   const navigate=useNavigate();
-  const { id } = useParams<{ id: string }>();
   const [session, setSession] = useState<ExamSession | null>(null);
   const [detections, setDetections] = useState<DetectionEvent[]>([]);
+  const [seatMap,setSeatMap]=useState<api.SessionSeatMap|null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [view, setView] = useState<'2d' | '3d'>('2d');
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
-  // Seat suspicion map from detections
-  const seatScores = useCallback(() => {
-    const scores = new Map<number, { score: number; types: string[]; name: string }>();
-    detections.forEach(d => {
-      if (d.status === 'New' || d.status === 'Reviewed') {
-        const existing = scores.get(d.seatNumber);
-        if (!existing || d.compositeScore > existing.score) {
-          scores.set(d.seatNumber, { score: d.compositeScore, types: d.behaviourTypes, name: d.studentName });
-        }
-      }
-    });
-    return scores;
-  }, [detections]);
-
   useEffect(() => {
     if (!id) return;
     if (!liveRevision) setLoading(true);
 
+    let cancelled=false;
     Promise.all([
       api.getSession(id),
       api.getDetectionEvents(id),
-    ]).then(([sessionRes, detectionsRes]) => {
+      api.getSessionSeatMap(id),
+    ]).then(([sessionRes, detectionsRes,map]) => {
+      if(cancelled)return;
+      setError('');setSeatMap(map);
       setSession(sessionRes.data);
       setDetections(detectionsRes.data);
       setLoading(false);
-    }).catch(reason => { setError(reason.message); setLoading(false); });
+    }).catch(reason => { if(!cancelled){setError(reason.message); setLoading(false);} });
 
     // Live alerts for this session (Socket.IO, alert:new)
     const unsubscribe = api.subscribeToAlerts(
@@ -57,7 +53,7 @@ export function LiveMonitor() {
     );
     unsubscribeRef.current = unsubscribe;
 
-    return () => { unsubscribe(); };
+    return () => { cancelled=true;unsubscribe(); };
   }, [id, liveRevision]);
 
   const handleEndSession = async () => {
@@ -72,8 +68,6 @@ export function LiveMonitor() {
   if (loading) return <LoadingState message="Connecting to monitoring feed..." />;
   if (!session) return <div role="alert" className="text-center py-16 text-(--color-text-muted)">{error || 'Session not found'}</div>;
 
-  const scores = seatScores();
-  const totalSeats = session.totalSeats || 0;
 
   return (
     <div>
@@ -109,67 +103,9 @@ export function LiveMonitor() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main: Seat Grid */}
         <div className="lg:col-span-2">
-          <SessionCamera sessionId={session.id} active={session.status === 'In Progress'} />
+          {seatMap&&<><RoomCamera key={session.id} sessionId={session.id} active={session.status === 'In Progress'} seatMap={seatMap}/>
+            <SessionSeatPlan map={seatMap} detections={detections} perspective={view==='3d'} onReview={event=>navigate(`/teacher/alerts?alert=${event.id}`)}/></>}
 
-          {/* 2D Seat Grid — the bold element */}
-          {(
-            <div className="bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default) p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-heading text-(--color-text-primary)">Seat grid</h2>
-                <span className="text-label text-(--color-text-muted)">{scores.size} active alerts of {totalSeats} seats</span>
-              </div>
-              <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${Math.max(1,Math.min(8, Math.ceil(Math.sqrt(totalSeats))))}, 1fr)`, transform:view==='3d'?'perspective(900px) rotateX(25deg)':undefined }}>
-                {Array.from({ length: totalSeats }, (_, i) => i + 1).map(seatNum => {
-                  const data = scores.get(seatNum);
-                  const intensity = data ? Math.min(1, data.score) : 0;
-                  return (
-                    <button
-                      key={seatNum}
-                      disabled={!data}
-                      onClick={()=>{ const event=detections.find(value=>value.seatNumber===seatNum&&(value.status==='New'||value.status==='Reviewed')); if(event) navigate(`/teacher/alerts?alert=${event.id}`); }}
-                      className="aspect-square rounded-[4px] flex items-center justify-center text-label font-medium transition-all cursor-pointer relative group"
-                      style={{
-                        backgroundColor: intensity > 0
-                          ? `rgba(220, 38, 38, ${0.1 + intensity * 0.5})`
-                          : 'var(--color-bg-surface-raised)',
-                        color: intensity > 0.7 ? 'white' : intensity > 0 ? 'var(--color-error)' : 'var(--color-text-muted)',
-                        borderWidth: '1px',
-                        borderColor: intensity > 0 ? `rgba(220, 38, 38, ${0.3 + intensity * 0.4})` : 'var(--color-border-default)',
-                      }}
-                      title={data ? `${data.name} — ${Math.round(data.score * 100)}%` : `Seat ${seatNum}`}
-                    >
-                      {seatNum}
-                      {/* Tooltip on hover */}
-                      {data && (
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10">
-                          <div className="bg-(--color-bg-surface-overlay) border border-(--color-border-default) rounded-[6px] shadow-[var(--shadow-overlay)] px-3 py-2 text-left min-w-[160px]">
-                            <p className="text-label font-medium text-(--color-text-primary)">{data.name}</p>
-                            <p className="text-label text-(--color-text-muted)">Score: {Math.round(data.score * 100)}%</p>
-                          </div>
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-              {/* Legend */}
-              <div className="flex items-center gap-4 mt-3 pt-3 border-t border-(--color-border-default)">
-                <span className="text-label text-(--color-text-muted)">Suspicion level:</span>
-                <div className="flex items-center gap-1">
-                  <div className="w-4 h-4 rounded-[2px] bg-(--color-bg-surface-raised) border border-(--color-border-default)" />
-                  <span className="text-label text-(--color-text-muted)">Clear</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <div className="w-4 h-4 rounded-[2px]" style={{ backgroundColor: 'rgba(220, 38, 38, 0.3)' }} />
-                  <span className="text-label text-(--color-text-muted)">Low</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <div className="w-4 h-4 rounded-[2px]" style={{ backgroundColor: 'rgba(220, 38, 38, 0.6)' }} />
-                  <span className="text-label text-(--color-text-muted)">High</span>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Right: Live alerts feed */}

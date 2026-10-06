@@ -99,6 +99,21 @@ async def preview_seatmap(
     return summarize(await resolve_seatmap(conn, await _parse(file)))
 
 
+@router.get('/api/sessions/{session_id}/seatmap')
+async def get_seatmap(session_id: UUID, current_user: CurrentUser = Depends(require_session_reader),
+                      conn: asyncpg.Connection = Depends(get_db)):
+    session = await _visible_session(conn, session_id, current_user)
+    rows = await conn.fetch('''SELECT sa.seat_number, sa.student_id::text AS student_id, sa.student_reg_no AS registration_no,
+        u.full_name AS student_name, COALESCE(u.status='active' AND u.deleted_at IS NULL,FALSE) AS active
+        FROM seat_assignments sa LEFT JOIN users u ON u.id=sa.student_id
+        WHERE sa.session_id=$1 ORDER BY sa.seat_number''', session_id)
+    polygons = await conn.fetchval('SELECT seat_map FROM classrooms WHERE id=$1', session['classroom_id']) if session['classroom_id'] else None
+    import json
+    return {'capacity': session['capacity'] or session['max_seat'] or 0,
+            'assignments': [dict(row) for row in rows],
+            'polygons': json.loads(polygons) if isinstance(polygons, str) else polygons or []}
+
+
 @router.post("/api/sessions/{session_id}/seatmap", response_model=SeatmapUploadResponse)
 async def upload_seatmap(
     session_id: UUID,
@@ -116,6 +131,11 @@ async def upload_seatmap(
         if session["status"] not in EDITABLE_SEATMAP_STATUSES:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The seat map of a finished or cancelled exam is part of its record and cannot change.")
         resolved = await resolve_seatmap(conn, parsed)
+        capacity = await conn.fetchval('SELECT cl.capacity FROM classrooms cl JOIN exam_sessions s ON s.classroom_id=cl.id WHERE s.id=$1', session_id)
+        if capacity and any(seat > capacity for seat, _ in parsed):
+            raise HTTPException(422, 'A seat number exceeds the classroom capacity. The previous map was kept.')
+        if any(row.status != SeatmapRowStatus.RESOLVED for row in resolved):
+            raise HTTPException(409, 'Resolve every CSV row before replacing the seat map. The previous map was kept.')
         await replace_seat_assignments(conn, str(session_id), resolved)
         result = summarize(resolved)
         await record_audit(
@@ -167,6 +187,9 @@ async def start_session(
         seat_summary = None
         if parsed is not None:
             resolved = await resolve_seatmap(conn, parsed)
+            capacity = await conn.fetchval('SELECT capacity FROM classrooms WHERE id=$1', classroom_id)
+            if capacity and any(seat > capacity for seat, _ in parsed):
+                raise HTTPException(422, 'A seat number exceeds the classroom capacity.')
             if any(row.status != SeatmapRowStatus.RESOLVED for row in resolved):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Resolve all seat assignments before starting the session.")
             await replace_seat_assignments(conn, session_id, resolved)
