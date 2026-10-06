@@ -1,0 +1,9 @@
+.live-monitor-grid {display:grid;grid-template-columns:minmax(0,1fr);gap:24px;align-items:start;}
+.live-monitor-alerts {min-width:0;}
+.live-monitor-alert-list {max-height:440px;overflow-y:auto;overscroll-behavior:contain;}
+@media(min-width:1024px) {
+  .live-monitor-grid {grid-template-columns:minmax(0,2fr) minmax(270px,1fr);}
+  .live-monitor-alerts {grid-column:2;grid-row:1 / span 2;position:sticky;top:12px;}
+  .live-monitor-seats {grid-column:1;}
+  .live-monitor-alert-list {max-height:min(600px,calc(100dvh - 200px));}
+}

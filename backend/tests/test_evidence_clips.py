@@ -241,7 +241,7 @@ async def test_reviewers_get_signed_urls_and_others_do_not(
 
     teacher = await login(client, TEACHER_EMAIL)
     pending = (await client.get(f"/api/cases/{case_id}/media", headers=auth(teacher))).json()
-    assert pending["clip_status"] == "pending_upload"
+    assert pending["clip_status"] == "snapshot_only"
     assert pending["clip"] is None and pending["record_image_url"] is None
     assert pending["snapshot_url"].startswith("https://signed.test/snapshots/")
 
@@ -262,6 +262,36 @@ async def test_reviewers_get_signed_urls_and_others_do_not(
         response = await client.get(f"/api/cases/{case_id}/media", headers=auth(await login(client, email)))
         assert response.status_code == 403
     assert await admin_conn.fetchval("SELECT count(*) FROM audit_log WHERE action = 'evidence_media_viewed'") == 4
+
+
+async def test_hosted_snapshot_is_available_from_both_alert_and_case(
+    client: AsyncClient, detection_case: dict[str, Any], storage: FakeStorage,
+    admin_conn: asyncpg.Connection,
+) -> None:
+    case_id=detection_case['id']
+    detection_id=await _detection_id(admin_conn,case_id)
+    for email in (TEACHER_EMAIL,HOD_EMAIL):
+        headers=auth(await login(client,email))
+        for path in (f'/api/cases/{case_id}/media',f'/api/detections/{detection_id}/media'):
+            response=await client.get(path,headers=headers)
+            assert response.status_code==200
+            media=response.json()
+            assert media['clip_status']=='snapshot_only'
+            assert media['clip'] is None
+            assert media['snapshot_url'].startswith('https://signed.test/snapshots/')
+
+
+async def test_purged_snapshot_is_not_returned_as_available_evidence(
+    client: AsyncClient,detection_case:dict[str,Any],storage:FakeStorage,
+    admin_conn:asyncpg.Connection,
+) -> None:
+    detection_id=await _detection_id(admin_conn,detection_case['id'])
+    await admin_conn.execute('UPDATE detection_events SET snapshot_purged_at=now() WHERE id=$1',detection_id)
+    response=await client.get(f'/api/detections/{detection_id}/media',headers=auth(await login(client,HOD_EMAIL)))
+    assert response.status_code==200
+    media=response.json()
+    assert media['snapshot_url'] is None and media['record_image_url'] is None
+    assert media['clip_status']!='snapshot_only'
 
 
 async def _case_with_clip(

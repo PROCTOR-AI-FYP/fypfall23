@@ -5,6 +5,8 @@ import { ArrowLeft, Clock, Users, ShieldAlert, FileCheck } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { StatCard, LoadingState } from '@/components/ui/DataDisplay';
 import { DataTable, type Column } from '@/components/ui/DataTable';
+import { Modal } from '@/components/ui/Modal';
+import { EvidenceViewer } from '@/components/evidence/EvidenceViewer';
 import { StatusChip, BehaviorChip } from '@/components/ui/Chips';
 import * as api from '@/lib/api';
 import type { ExamSession, Case } from '@/lib/types';
@@ -17,6 +19,7 @@ export function SessionReport() {
   const [session, setSession] = useState<ExamSession | null>(null);
   const [cases, setCases] = useState<Case[]>([]);
   const [loading, setLoading] = useState(true);
+  const [reviewCase,setReviewCase]=useState<Case|null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -55,7 +58,8 @@ export function SessionReport() {
     { key: 'referenceNo', header: 'Case ID', render: c => <span className="font-medium text-(--color-accent-primary)">{c.referenceNo}</span> },
     { key: 'studentName', header: 'Student', render: c => <span>{c.studentName} ({c.seatNumber})</span> },
     { key: 'behaviourTypes', header: 'Behaviors', render: c => <div className="flex gap-1">{c.behaviourTypes.map(b => <BehaviorChip key={b} type={b} />)}</div> },
-    { key: 'status', header: 'Status', render: c => <StatusChip status={c.status} /> }
+    { key: 'status', header: 'Status', render: c => <StatusChip status={c.status} /> },
+    { key: 'evidence', header: 'Evidence', render: c => <Button variant="secondary" size="sm" onClick={()=>setReviewCase(c)}>View evidence</Button> }
   ];
 
   return (
@@ -116,6 +120,9 @@ export function SessionReport() {
       {/* Cases Table */}
       <h2 className="text-heading text-(--color-text-primary) mb-4">Confirmed Cases</h2>
       <DataTable columns={columns} data={cases} emptyMessage="No cases confirmed during this session." rowKey={c=>c.id} />
+      <Modal isOpen={!!reviewCase} onClose={()=>setReviewCase(null)} title="Case evidence" size="lg" footer={<Button variant="secondary" onClick={()=>setReviewCase(null)}>Close</Button>}>
+        {reviewCase&&<><p className="text-body-sm mb-3">{reviewCase.referenceNo} · Seat {reviewCase.seatNumber} · {reviewCase.studentName}</p><EvidenceViewer caseId={reviewCase.id} subjectLabel={`seat ${reviewCase.seatNumber}, ${reviewCase.studentName}`}/></>}
+      </Modal>
     </div>
   );
 }

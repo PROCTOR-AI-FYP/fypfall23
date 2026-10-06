@@ -925,12 +925,12 @@ function toMedia(m: ApiMedia): CaseMedia {
   };
 }
 
-export async function getCaseMedia(caseId: string): Promise<ApiResponse<CaseMedia>> {
-  return { data: toMedia(await request<ApiMedia>('GET', `/api/cases/${caseId}/media`)) };
+export async function getCaseMedia(caseId: string, signal?:AbortSignal): Promise<ApiResponse<CaseMedia>> {
+  return { data: toMedia(await request<ApiMedia>('GET', `/api/cases/${caseId}/media`,{signal})) };
 }
 
-export async function getDetectionMedia(detectionId: string): Promise<ApiResponse<CaseMedia>> {
-  return { data: toMedia(await request<ApiMedia>('GET', `/api/detections/${detectionId}/media`)) };
+export async function getDetectionMedia(detectionId: string, signal?:AbortSignal): Promise<ApiResponse<CaseMedia>> {
+  return { data: toMedia(await request<ApiMedia>('GET', `/api/detections/${detectionId}/media`,{signal})) };
 }
 
 // ── Thresholds API ─────────────────────────

@@ -23,3 +23,19 @@ test('authoritative REST dismissal updates the feed after a missed socket event'
   const feed=new LiveAlertFeed('exam');feed.receive(event('phone'));feed.reconcile(feed.beginSnapshot(),[event('phone',0,'Dismissed')]);
   assert.equal(feed.list()[0].status,'Dismissed');
 });
+
+test('a later incomplete REST list cannot erase a committed camera alert',()=>{
+  const feed=new LiveAlertFeed('exam');feed.receive(event('phone',1));
+  feed.reconcile(feed.beginSnapshot(),[]);
+  assert.deepEqual(feed.list().map(e=>e.id),['phone']);
+  feed.reconcile(feed.beginSnapshot(),[event('head',2)]);
+  assert.deepEqual(feed.list().map(e=>e.id),['head','phone']);
+});
+
+test('alert history stays bounded while later review updates apply',()=>{
+  const feed=new LiveAlertFeed('exam');
+  for(let index=0;index<520;index++)feed.receive(event(`alert-${index}`,index));
+  feed.reconcile(feed.beginSnapshot(),[]);assert.equal(feed.list().length,500);
+  feed.reconcile(feed.beginSnapshot(),[event('alert-519',519,'Reviewed')]);
+  assert.equal(feed.list()[0].status,'Reviewed');
+});

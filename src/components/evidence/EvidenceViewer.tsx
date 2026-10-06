@@ -3,6 +3,7 @@ import { Archive, ExternalLink, Film, Hourglass, ImageOff, RefreshCw, RotateCw, 
 import { Button } from '@/components/ui/Button';
 import * as api from '@/lib/api';
 import type { CaseMedia } from '@/lib/types';
+import { reviewImage } from '@/lib/evidence-media';
 
 // ── Props ──────────────────────────────────
 
@@ -49,8 +50,8 @@ export function EvidenceViewer(props: EvidenceViewerProps) {
 // review) the silent refetch is allowed again.
 const AUTO_RETRY_WINDOW_MS = 30_000;
 
-function fetchMedia(kind: TargetKind, id: string) {
-  return kind === 'case' ? api.getCaseMedia(id) : api.getDetectionMedia(id);
+function fetchMedia(kind: TargetKind, id: string, signal?:AbortSignal) {
+  return kind === 'case' ? api.getCaseMedia(id,signal) : api.getDetectionMedia(id,signal);
 }
 
 function errorMessage(e: unknown): string {
@@ -105,14 +106,37 @@ function EvidenceViewerInner({ kind, id, concealed, subjectLabel, className = ''
   const lastAutoRetryAt = useRef<number | null>(null);
   const resumeAt = useRef(0);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const pendingSince = useRef(Date.now());
+  const [pendingExpired,setPendingExpired] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    fetchMedia(kind, id)
+    const controller=new AbortController();
+    fetchMedia(kind, id,AbortSignal.any([controller.signal,AbortSignal.timeout(10000)]))
       .then(r => { if (!cancelled) setResult({ attempt, status: 'ok', media: r.data }); })
       .catch(e => { if (!cancelled) setResult({ attempt, status: 'error', message: errorMessage(e) }); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
   }, [kind, id, attempt]);
+
+  const waiting=result?.status==='ok'&&result.media.clipStatus==='pending_upload';
+  useEffect(()=>{
+    if(!waiting||pendingExpired)return;
+    let cancelled=false;
+    let timer:ReturnType<typeof setTimeout>;
+    const controller=new AbortController();
+    const poll=async()=>{
+      if(Date.now()-pendingSince.current>=120000){setPendingExpired(true);return;}
+      try{
+        if(document.visibilityState==='visible'){
+          const response=await fetchMedia(kind,id,AbortSignal.any([controller.signal,AbortSignal.timeout(10000)]));
+          if(!cancelled)setResult({attempt,status:'ok',media:response.data});
+        }
+      }catch{/* Keep any already available evidence while retrying. */}
+      finally{if(!cancelled)timer=setTimeout(()=>void poll(),5000);}
+    };
+    timer=setTimeout(()=>void poll(),5000);
+    return()=>{cancelled=true;controller.abort();clearTimeout(timer);};
+  },[waiting,pendingExpired,kind,id,attempt]);
 
   // Never keep playing behind the privacy blur.
   useEffect(() => {
@@ -122,6 +146,8 @@ function EvidenceViewerInner({ kind, id, concealed, subjectLabel, className = ''
   const loading = result === null || result.attempt !== attempt;
 
   const reload = () => {
+    pendingSince.current=Date.now();
+    setPendingExpired(false);
     setRecovery('idle');
     lastAutoRetryAt.current = null;
     resumeAt.current = 0;
@@ -133,7 +159,7 @@ function EvidenceViewerInner({ kind, id, concealed, subjectLabel, className = ''
     const forAttempt = attempt;
     setRecovery('refreshing');
     try {
-      const r = await fetchMedia(kind, id);
+      const r = await fetchMedia(kind, id,AbortSignal.timeout(10000));
       setResult(prev => (prev && prev.attempt === forAttempt ? { attempt: forAttempt, status: 'ok', media: r.data } : prev));
       setMediaVersion(v => v + 1);
       setRecovery('idle');
@@ -207,17 +233,23 @@ function EvidenceViewerInner({ kind, id, concealed, subjectLabel, className = ''
 
   const { media } = result;
   const subject = subjectLabel ? ` for ${subjectLabel}` : '';
+  const savedImage=reviewImage(media);
 
-  if (media.clipStatus === 'snapshot_only') {
+  if (savedImage&&media.clipStatus!=='deleted_after_review'&&
+      (media.clipStatus!=='available'||!media.clip)) {
     return <div className={className}>
-      {!media.snapshotUrl ? <StatePanel icon={<ImageOff size={20} />} tone="neutral" title="Snapshot unavailable" description="This evidence image is no longer available." />
-        : recovery === 'failed' ? <MediaFailedPanel noun="snapshot" onReload={manualMediaReload} />
+      {recovery === 'failed' ? <MediaFailedPanel noun={savedImage.kind==='snapshot'?'snapshot':'record image'} onReload={manualMediaReload} />
         : <ConcealableFrame concealed={concealed} refreshing={recovery === 'refreshing'} refreshingLabel="Refreshing evidence…">
-          <img key={mediaVersion} src={media.snapshotUrl} alt={`Detection snapshot${subject}`} onError={handleMediaError} className="w-full h-full object-contain" />
+          <img key={mediaVersion} src={savedImage.url} alt={`${savedImage.kind==='snapshot'?'Detection snapshot':'Record image'}${subject}`} onError={handleMediaError} className="w-full h-full object-contain" />
         </ConcealableFrame>}
-      <p className="px-4 py-3 text-body-sm border-t border-(--color-border-default)">Detection snapshot from the local exam camera.</p>
+      <div className="px-4 py-3 text-body-sm border-t border-(--color-border-default) space-y-2">
+        <p>Saved camera {savedImage.kind==='snapshot'?'snapshot':'record image'} for this alert.</p>
+        {!concealed&&recovery!=='failed'&&<a href={savedImage.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-label text-(--color-accent-primary) hover:underline"><ExternalLink size={13}/>Open full-size image</a>}
+        <Button variant="secondary" size="sm" onClick={manualMediaReload} disabled={recovery==='refreshing'}><RefreshCw size={14}/>Refresh evidence</Button>
+      </div>
     </div>;
   }
+  if(media.clipStatus==='snapshot_only')return <StatePanel icon={<ImageOff size={20}/>} tone="neutral" title="Snapshot unavailable" description="This evidence image is no longer available."/>;
 
   // ── Pending upload ──
   if (media.clipStatus === 'pending_upload') {
@@ -227,8 +259,8 @@ function EvidenceViewerInner({ kind, id, concealed, subjectLabel, className = ''
           role="status"
           icon={<Hourglass size={20} aria-hidden="true" />}
           tone="warning"
-          title="Clip still processing"
-          description="The review clip for this detection is still being compressed and uploaded. It will appear here once processing finishes."
+          title={pendingExpired?'Evidence has not arrived':'Checking for saved evidence'}
+          description={pendingExpired?'No saved snapshot or clip is available yet. Check again to request the latest evidence.':'The saved snapshot or clip is not available yet. This view checks automatically for updates.'}
           action={
             <Button variant="secondary" size="sm" onClick={reload}>
               <RefreshCw size={14} aria-hidden="true" />
@@ -242,7 +274,7 @@ function EvidenceViewerInner({ kind, id, concealed, subjectLabel, className = ''
 
   // ── Deleted after review: permanent record image ──
   if (media.clipStatus === 'deleted_after_review') {
-    const imageUrl = media.recordImageUrl;
+    const imageUrl = savedImage?.url;
     return (
       <div className={className}>
         {!imageUrl ? (
@@ -259,7 +291,7 @@ function EvidenceViewerInner({ kind, id, concealed, subjectLabel, className = ''
             <img
               key={mediaVersion}
               src={imageUrl}
-              alt={`Record image${subject}: four frames from the deleted review clip, arranged in a two by two grid.`}
+              alt={savedImage?.kind==='snapshot'?`Detection snapshot${subject}`:`Record image${subject}: four frames from the deleted review clip, arranged in a two by two grid.`}
               onError={handleMediaError}
               className="w-full h-full object-contain"
             />
@@ -274,7 +306,7 @@ function EvidenceViewerInner({ kind, id, concealed, subjectLabel, className = ''
               {media.clipDeletedAt ? (
                 <> on <time dateTime={media.clipDeletedAt}>{formatDate(media.clipDeletedAt)}</time></>
               ) : null}
-              . This still image, made from frames of the clip, is kept as the record.
+              . {savedImage?.kind==='snapshot'?'The detection snapshot is kept as the record.':'This still image, made from frames of the clip, is kept as the record.'}
             </p>
             {imageUrl && recovery !== 'failed' && !concealed && (
               <a

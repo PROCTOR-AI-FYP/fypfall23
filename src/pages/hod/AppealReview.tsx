@@ -5,6 +5,7 @@ import { DataTable, type Column } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { FormField, TextArea } from '@/components/ui/FormElements';
+import { EvidenceViewer } from '@/components/evidence/EvidenceViewer';
 import { useAuth } from '@/lib/auth-context';
 import * as api from '@/lib/api';
 import { type Appeal, AppealStatus } from '@/lib/types';
@@ -85,6 +86,10 @@ export function AppealReview() {
           </div>
         ) : selectedAppeal && (
           <div className="space-y-5">
+            <section aria-label="Appeal case evidence" className="rounded-[6px] border border-(--color-border-default) overflow-hidden">
+              <h3 className="px-4 py-3 text-heading border-b border-(--color-border-default)">Case evidence</h3>
+              <EvidenceViewer caseId={selectedAppeal.caseId} subjectLabel={selectedAppeal.studentName}/>
+            </section>
             <div className="bg-(--color-bg-surface-raised) rounded-[6px] p-4">
               <h3 className="text-label text-(--color-text-muted) mb-2">Student's statement</h3>
               <p className="text-body text-(--color-text-primary)">{selectedAppeal.statement}</p>

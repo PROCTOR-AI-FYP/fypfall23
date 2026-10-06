@@ -168,11 +168,14 @@ async def _media_response(
     else:
         clip_status = ClipStatus.PENDING_UPLOAD
 
-    from app.services.camera import local_snapshot_path
-    if clip_status == ClipStatus.PENDING_UPLOAD and row['snapshot_path'] and local_snapshot_path(row['snapshot_path']) is not None:
+    images_kept = row["snapshot_purged_at"] is None
+    # Device-camera alerts already store a snapshot before the case commits.
+    # Its availability does not depend on whether storage is local or hosted,
+    # and these alerts do not enqueue a video clip.
+    if clip_status == ClipStatus.PENDING_UPLOAD and images_kept and row['snapshot_path']:
         clip_status = ClipStatus.SNAPSHOT_ONLY
 
-    images_kept = row["snapshot_purged_at"] is None
+    from app.services.camera import local_snapshot_path
     wanted = {
         "clip": row["clip_path"] if clip_status == ClipStatus.AVAILABLE else None,
         "record": row["record_image_path"] if images_kept else None,
