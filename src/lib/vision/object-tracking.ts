@@ -26,14 +26,15 @@ export class ObjectOverlayTracker {
       return sample?[{object,...sample,width:box[2]-box[0],height:box[3]-box[1],expires:now+ttl}]:[];
     });
   }
-  update(image:ImageData,now:number):CameraObject[] {
+  update(image:ImageData,now:number,bounds=[0,0,1,1]):CameraObject[] {
     const gray=grayscale(image),result:CameraObject[]=[];
+    const [left,top,right,bottom]=bounds.map((v,i)=>v*(i%2?image.height:image.width));
     for(const patch of this.patches) {
       if(now>patch.expires)continue;
       let best=.76,bestBox:number[]|null=null;
       const previous=patch.object.box.map((value,i)=>value*(i%2?image.height:image.width));
       const priorSample=samples(gray,image.width,image.height,previous);
-      if(priorSample){
+      if(priorSample&&previous[0]>=left&&previous[1]>=top&&previous[2]<=right&&previous[3]<=bottom){
         let dot=0;for(let i=0;i<grid*grid;i++)dot+=priorSample.values[i]*patch.values[i];
         const score=dot/(priorSample.norm*patch.norm);
         if(score>best){best=score;bestBox=previous;}
@@ -41,7 +42,7 @@ export class ObjectOverlayTracker {
       for(const scale of [.85,1,1.15]) {
         if(best>.98)break;
         const w=patch.width*scale,h=patch.height*scale;if(w<3||h<3)continue;
-        for(let y=0;y+h<image.height;y+=6)for(let x=0;x+w<image.width;x+=6) {
+        for(let y=Math.ceil(top);y+h<bottom;y+=6)for(let x=Math.ceil(left);x+w<right;x+=6) {
           const box=[x,y,x+w,y+h],sample=samples(gray,image.width,image.height,box);if(!sample)continue;
           let dot=0;for(let i=0;i<grid*grid;i++)dot+=sample.values[i]*patch.values[i];
           const score=dot/(sample.norm*patch.norm);if(score>best){best=score;bestBox=box;}

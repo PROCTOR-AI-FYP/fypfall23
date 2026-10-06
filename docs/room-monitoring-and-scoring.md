@@ -30,6 +30,15 @@ face detection losing faces in a wide-room image and avoids VIDEO tracking
 carrying one seat's face into another crop. Multiple faces, unclear faces, and
 faces straddling seat regions cannot establish an attributed head warning.
 
+Live Monitor opens the whole-classroom camera by default. Each mapped seat also
+has its own browser head-pose tracker and native image crop, using the shared
+MediaPipe IMAGE model. All student cards keep their yaw, pitch, and roll visible;
+highlighting a seat does not restrict tracking or hide another student's pose.
+Device angles are responsive preview data only. The server independently checks
+camera images and the administrator's policy before creating evidence or cases.
+Object overlay tracking stays inside each student's mapped region and never
+supplies scores or ownership to the server.
+
 Object inference first checks the whole room image. Every unambiguously
 attributed, verified object advances its own seat's confirmation in that sample;
 multiple seats can create separate cases in the same request. When the room
@@ -98,3 +107,11 @@ socket/MQTT delivery failure cannot remove the committed snapshot or release its
 cooldown. The website's authorized REST reconciliation recovers missed live
 messages. Failed uncommitted uploads release their owned cooldown claims for
 retry and report an error in the camera panel.
+
+Committed room alerts are also returned in the camera HTTP response using the
+same authorized detection format as REST and Socket.IO. The active feed inserts
+these immediately, deduplicates them against socket delivery, and keeps its
+socket subscription stable during refreshes. A REST request begun before a new
+alert cannot erase it on completion. Visible monitors reconcile missing alerts
+every two seconds and display every returned alert, rather than hiding all but
+the newest twenty. No provisional browser warning is represented as a saved case.

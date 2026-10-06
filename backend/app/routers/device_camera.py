@@ -146,6 +146,25 @@ async def save_alert(run, request, image, scores, *, head_only=False, evidence=N
             logger.exception('Could not persist device-camera evidence for run %s', run.run_id)
             return None, 'Detection worked, but evidence could not be saved. Monitoring will retry.'
 
+
+async def committed_detections(alerts, request):
+    """Return committed alert rows for immediate first-party feed delivery.
+
+    This is the same authorized wire format as REST/Socket.IO. Browser head
+    measurements cannot create these rows, and a revoked teacher gets no data.
+    """
+    if not alerts:
+        return []
+    from app.routers.detections import DETECTION_SELECT, row_to_detection
+    async with acquire_connection() as conn:
+        current = await resolve_session_user(conn,request.cookies.get(settings.session_cookie_name))
+        if current.role != Role.TEACHER:
+            raise HTTPException(403,'Exam monitoring access changed.')
+        rows = await conn.fetch(DETECTION_SELECT+'''
+            WHERE c.id=ANY($1::uuid[]) AND s.invigilator_id=$2::uuid
+            ORDER BY de.detected_at DESC''',[UUID(alert['id']) for alert in alerts],current.user_id)
+    return [row_to_detection(row).model_dump(mode='json') for row in rows]
+
 @router.post('/api/device-camera/{run_id}/head/calibrate', status_code=204)
 async def calibrate_head(run_id: UUID, user: CurrentUser = Depends(teacher)):
     enabled()
@@ -247,7 +266,7 @@ async def room_head_frame(run_id: UUID, request: Request, frame_index: int = Que
                 evidence=run.room.evidence(image,target.seat_number))
             if alert: alerts.append(alert)
             if error: errors.append(error)
-    return {'seats':states,'alerts':alerts,'alert_error':next(iter(errors),None),
+    return {'seats':states,'alerts':alerts,'detections':await committed_detections(alerts,request),'alert_error':next(iter(errors),None),
             'image_size':[image.shape[1],image.shape[0]]}
 
 
@@ -291,7 +310,7 @@ async def room_frame(run_id: UUID, request: Request, frame_index: int = Query(ge
     priority = ['failed','saved','confirming','cooldown','below_review_cutoff','below_signal_threshold','no_verified_object']
     review_status = min((r['status'] for r in reviews),key=priority.index)
     return {'objects':objects,'ai_seconds':seconds,'frame_index':frame_index,
-            'alert':next(iter(alerts),None),'alerts':alerts,'alert_error':next(iter(errors),None),
+            'alert':next(iter(alerts),None),'alerts':alerts,'detections':await committed_detections(alerts,request),'alert_error':next(iter(errors),None),
             'warning':warning,'checked_seat':None if whole_room else batches[0][0].seat_number,
             'mapped_seats':len(run.room.seats),'reviews':reviews,
             'review_observations':max(r['observations'] for r in reviews),'review_status':review_status}

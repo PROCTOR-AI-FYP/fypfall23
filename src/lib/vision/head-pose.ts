@@ -41,6 +41,12 @@ function distance(a: Rotation,b: Rotation) {
 }
 
 export class HeadPoseTracker {
+  private maxGap:number;
+  private referenceLoss:number;
+  constructor({maxGap=.5,referenceLoss=2}={}) {
+    if(!Number.isFinite(maxGap)||maxGap<=0||!Number.isFinite(referenceLoss)||referenceLoss<maxGap)throw Error('Invalid head tracking timing');
+    this.maxGap=maxGap;this.referenceLoss=referenceLoss;
+  }
   neutral: Rotation | null = null;
   filtered: Rotation | null = null;
   samples: Rotation[] | null = null;
@@ -60,8 +66,8 @@ export class HeadPoseTracker {
   update(rotation: Rotation | null, now: number, reason='no_face', box: number[] | null=null, shape=this.shape): HeadState {
     if (!Number.isFinite(now)) throw Error('Invalid timestamp');
     const dt=this.lastTime===null?null:now-this.lastTime;
-    if (dt!==null&&(dt<=0||dt>.5)) { this.filtered=null; this.violationStart=null; this.resetSamples(); }
-    if ((dt!==null&&(dt<=0||dt>=2)) || (this.lastValid!==null&&now-this.lastValid>=2) || (this.shape&&shape!==this.shape) || reason==='multiple_faces') this.neutral=null;
+    if (dt!==null&&(dt<=0||dt>this.maxGap)) { this.filtered=null; this.violationStart=null; this.resetSamples(); }
+    if ((dt!==null&&(dt<=0||dt>=this.referenceLoss)) || (this.lastValid!==null&&now-this.lastValid>=this.referenceLoss) || (this.shape&&shape!==this.shape) || reason==='multiple_faces') this.neutral=null;
     this.lastTime=now; this.shape=shape;
     this.status={...this.status,box,calibrated:this.neutral!==null};
     if (!rotation) {
@@ -79,7 +85,7 @@ export class HeadPoseTracker {
       if (!this.samples.length) this.calibrationStart=now;
       this.samples.push(rotation);
       const elapsed=now-this.calibrationStart!;
-      this.status.state='calibrating'; this.status.calibration_progress=Math.min(1,elapsed/2);
+      this.status.state='calibrating'; this.status.calibration_progress=Math.min(1,elapsed/2,this.samples.length/8);
       if (elapsed<2||this.samples.length<8) return this.status;
       this.neutral=orthogonal(rotation.map((_,i) => this.samples!.reduce((sum,r) => sum+r[i],0)/this.samples!.length));
       this.samples=null; this.filtered=null; this.status.calibrating=false; this.status.calibrated=true;

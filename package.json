@@ -10,7 +10,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test:auth": "node --test tests/frontend-session.test.mjs",
-    "test:vision": "node --test tests/head-pose.test.mjs tests/object-overlay.test.mjs",
+    "test:vision": "node --test tests/head-pose.test.mjs tests/room-head-pose.test.mjs tests/object-overlay.test.mjs",
+    "test:alerts": "node --test tests/live-alert-feed.test.mjs",
     "test:deployment": "node --test tests/vercel-config.test.mjs",
     "preview": "vite preview"
   },

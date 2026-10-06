@@ -1,5 +1,4 @@
 import { RoomCamera } from '@/components/monitoring/RoomCamera';
-import { DeviceCamera } from '@/components/monitoring/DeviceCamera';
 import { SessionSeatPlan } from '@/components/monitoring/SessionSeatPlan';
 import { useLiveRevision } from '@/lib/live-context';
 import { useEffect, useState, useRef } from 'react';
@@ -9,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { BehaviorChip } from '@/components/ui/Chips';
 import { ConfidenceBar, LoadingState } from '@/components/ui/DataDisplay';
 import * as api from '@/lib/api';
+import { LiveAlertFeed } from '@/lib/live-alert-feed';
 import { type ExamSession, type DetectionEvent } from '@/lib/types';
 
 export function LiveMonitor() {
@@ -25,14 +25,13 @@ function MonitorSession({id}:{id?:string}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [view, setView] = useState<'2d' | '3d'>('2d');
-  const [cameraMode,setCameraMode]=useState<'live'|'room'>('live');
+  const [feed]=useState(()=>new LiveAlertFeed(id||''));
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!id) return;
-    if (!liveRevision) setLoading(true);
-
     let cancelled=false;
+    const snapshot=feed.beginSnapshot();
     Promise.all([
       api.getSession(id),
       api.getDetectionEvents(id),
@@ -41,22 +40,36 @@ function MonitorSession({id}:{id?:string}) {
       if(cancelled)return;
       setError('');setSeatMap(map);
       setSession(sessionRes.data);
-      setDetections(detectionsRes.data);
+      if(feed.reconcile(snapshot,detectionsRes.data))setDetections(feed.list());
       setLoading(false);
     }).catch(reason => { if(!cancelled){setError(reason.message); setLoading(false);} });
 
-    // Live alerts for this session (Socket.IO, alert:new)
+    return () => { cancelled=true; };
+  }, [id, liveRevision,feed]);
+
+  useEffect(()=>{
+    if(!id)return;
+    let cancelled=false,pending=false;
+    const controller=new AbortController();
+    const reconcile=async()=>{
+      if(pending||cancelled)return;pending=true;
+      const snapshot=feed.beginSnapshot();
+      try{const result=await api.getDetectionEvents(id,controller.signal);if(!cancelled&&feed.reconcile(snapshot,result.data))setDetections(feed.list());}
+      catch(reason){if(!cancelled)setError((reason as Error).message);}
+      finally{pending=false;}
+    };
+    // Keep this subscription stable while background REST reconciliation runs.
     const unsubscribe = api.subscribeToAlerts(
       (event: DetectionEvent) => {
-        if (event.sessionId !== id) return;
-        setDetections(prev => (prev.some(d => d.id === event.id) ? prev : [event, ...prev]));
+        if(!cancelled&&feed.receive(event))setDetections(feed.list());
       },
       { sessionId: id },
     );
     unsubscribeRef.current = unsubscribe;
-
-    return () => { cancelled=true;unsubscribe(); };
-  }, [id, liveRevision]);
+    const timer=window.setInterval(()=>{if(document.visibilityState==='visible')void reconcile();},2000);
+    const focus=()=>void reconcile();window.addEventListener('focus',focus);
+    return()=>{cancelled=true;controller.abort();unsubscribe();window.clearInterval(timer);window.removeEventListener('focus',focus);};
+  },[id,feed]);
 
   const handleEndSession = async () => {
     if (!id) return;
@@ -105,18 +118,14 @@ function MonitorSession({id}:{id?:string}) {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main: Seat Grid */}
         <div className="lg:col-span-2">
-          <div className="flex flex-wrap items-center gap-2 mb-3" role="group" aria-label="Camera monitoring mode">
-            <Button variant={cameraMode==='live'?'primary':'secondary'} aria-pressed={cameraMode==='live'} onClick={()=>setCameraMode('live')}>Live camera</Button>
-            <Button variant={cameraMode==='room'?'primary':'secondary'} aria-pressed={cameraMode==='room'} onClick={()=>setCameraMode('room')}>Classroom mapping</Button>
-          </div>
-          {cameraMode==='live'?<DeviceCamera key={`live-${session.id}`} sessionId={session.id} active={session.status === 'In Progress'}/>:seatMap&&<RoomCamera key={`room-${session.id}`} sessionId={session.id} active={session.status === 'In Progress'} seatMap={seatMap}/>}
+          {seatMap&&<RoomCamera key={session.id} sessionId={session.id} active={session.status === 'In Progress'} seatMap={seatMap}/>}
           {seatMap&&<SessionSeatPlan map={seatMap} detections={detections} perspective={view==='3d'} onReview={event=>navigate(`/teacher/alerts?alert=${event.id}`)}/>}
 
         </div>
 
         {/* Right: Live alerts feed */}
         <div>
-          <div className="bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default)">
+          <div role="region" aria-label="Live exam alerts" className="bg-(--color-bg-surface) rounded-[6px] border border-(--color-border-default)">
             <div className="px-4 py-3 border-b border-(--color-border-default) flex items-center justify-between">
               <h2 className="text-heading text-(--color-text-primary)">Live alerts</h2>
               <div className="flex items-center gap-1.5">
@@ -127,10 +136,10 @@ function MonitorSession({id}:{id?:string}) {
             <div className="max-h-[600px] overflow-y-auto divide-y divide-(--color-border-default)">
               {detections.length === 0 ? (
                 <div className="px-4 py-8 text-center text-body-sm text-(--color-text-muted)">
-                  No alerts yet — monitoring active
+                  No review alerts yet. Start the classroom camera to monitor all mapped seats.
                 </div>
               ) : (
-                detections.slice(0, 20).map(d => (
+                detections.map(d => (
                   <div key={d.id} className={`px-4 py-3 ${d.status === 'New' ? 'bg-(--color-error-subtle)/30' : ''}`}>
                     <div className="flex items-start justify-between mb-1.5">
                       <span className="text-body-sm font-medium text-(--color-text-primary)">{d.studentName}</span>

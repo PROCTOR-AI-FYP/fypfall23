@@ -182,6 +182,9 @@ async def test_room_head_endpoint_creates_only_the_violating_students_case(clien
     results=[await sample(i) for i in range(10,23)]
     alerts=[a for r in results for a in r['alerts']]
     assert len(alerts)==1 and alerts[0]['seat_number']==25
+    updates=[d for r in results for d in r['detections']]
+    assert len(updates)==1 and updates[0]['case_id']==alerts[0]['id']
+    assert updates[0]['seat_number']==25 and updates[0]['behaviour_types']==['HEAD_POSE_VIOLATION']
     row=await admin_conn.fetchrow('SELECT * FROM detection_events WHERE session_id=$1::uuid',active_session)
     assert list(row['behaviour_types'])==['HEAD_POSE_VIOLATION'] and row['snapshot_path'] in saved
     assert results[-1]['seats'][0]['sustained'] is False
@@ -239,13 +242,18 @@ def test_visible_wide_object_does_not_starve_other_seats_detail_checks():
     assert events[0].label=='book' and objects[0]['seat_number']==25
 
 
-async def test_one_room_sample_can_save_two_separate_student_cases(client,admin_conn,active_session,device,monkeypatch):
+@pytest.mark.parametrize('socket_available',[True,False])
+async def test_one_room_sample_can_save_two_separate_student_cases(client,admin_conn,active_session,device,monkeypatch,socket_available):
     from app.services import storage
     from app.services.device_camera import decode_frame,time
     class Storage:
         async def upload(self,*args):pass
         async def delete(self,*args):pass
     monkeypatch.setattr(storage,'get_storage',lambda:Storage())
+    if not socket_available:
+        from app.routers import internal
+        async def disconnected(*args):raise RuntimeError('test socket outage')
+        monkeypatch.setattr(internal,'emit_detection',disconnected)
     await add_second_student(admin_conn,active_session)
     headers=auth(await login(client,TEACHER_EMAIL))
     started=await client.post(f'/api/sessions/{active_session}/device-camera/room/start',headers=headers,json={'regions':REGIONS})
@@ -261,7 +269,23 @@ async def test_one_room_sample_can_save_two_separate_student_cases(client,admin_
     response=await client.post(f'/api/device-camera/{run.run_id}/room/frame?frame_index=0',headers={**headers,'Content-Type':'image/jpeg'},content=jpeg())
     assert response.status_code==200,response.text
     assert {a['seat_number'] for a in response.json()['alerts']}=={14,25}
+    updates=response.json()['detections']
+    assert {d['seat_number'] for d in updates}=={14,25}
+    assert {d['case_id'] for d in updates}=={a['id'] for a in response.json()['alerts']}
+    assert all(d['session_id']==active_session and d['student_name'] and d['id']!=d['case_id'] for d in updates)
+    assert all('snapshot_path' not in d for d in updates)
     assert response.json()['checked_seat'] is None
     rows=await admin_conn.fetch('SELECT seat_number,behaviour_types FROM detection_events WHERE session_id=$1::uuid ORDER BY seat_number',active_session)
     assert list(rows[0]['behaviour_types'])==['PHONE_DETECTED']
     assert list(rows[1]['behaviour_types'])==['UNAUTHORISED_OBJECT']
+    # The committed HTTP feed also rechecks the current account and assignment.
+    from app.routers.device_camera import committed_detections
+    from starlette.requests import Request
+    from fastapi import HTTPException
+    alerts=response.json()['alerts']
+    other=Request({'type':'http','headers':[(b'cookie',auth(await login(client,HOD_EMAIL))['Cookie'].encode())]})
+    with pytest.raises(HTTPException) as denied:await committed_detections(alerts,other)
+    assert denied.value.status_code==403
+    await admin_conn.execute('UPDATE exam_sessions SET invigilator_id=NULL WHERE id=$1::uuid',active_session)
+    owner=Request({'type':'http','headers':[(b'cookie',headers['Cookie'].encode())]})
+    assert await committed_detections(alerts,owner)==[]

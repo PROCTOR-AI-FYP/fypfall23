@@ -143,6 +143,9 @@ async def prepare():
             FROM users WHERE role='teacher' ''',SESSION)
         await conn.execute('''INSERT INTO seat_assignments(session_id,seat_number,student_reg_no,student_id)
             SELECT $1,14,'232475',id FROM users WHERE registration_or_employee_no='232475' ''',SESSION)
+        if '--two-students' in sys.argv:
+            await conn.execute('''INSERT INTO seat_assignments(session_id,seat_number,student_reg_no,student_id)
+                SELECT $1,25,'232490',id FROM users WHERE registration_or_employee_no='232490' ''',SESSION)
         await conn.execute("UPDATE detection_thresholds SET sensitivity=40 WHERE behaviour_type='UNAUTHORISED_OBJECT'")
     finally: await conn.close()
     runtime=ROOT/'ai-engine/.runtime/platform-browser'

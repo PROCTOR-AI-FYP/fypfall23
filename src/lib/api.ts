@@ -425,7 +425,7 @@ function toCase(c: ApiCase): Case {
   };
 }
 
-interface ApiDetection {
+export interface ApiDetection {
   id: string;
   session_id: string;
   seat_number: number;
@@ -792,8 +792,8 @@ export async function resolveAppeal(appealId: string, data: {
 // ── Detection Events (alerts) API ──────────
 
 /** Alerts for one session, or, without a session, every alert the user may see. */
-export async function getDetectionEvents(sessionId?: string): Promise<PaginatedResponse<DetectionEvent>> {
-  const detections = await request<ApiDetection[]>('GET', '/api/detections', { query: { session_id: sessionId } });
+export async function getDetectionEvents(sessionId?: string, signal?:AbortSignal): Promise<PaginatedResponse<DetectionEvent>> {
+  const detections = await request<ApiDetection[]>('GET', '/api/detections', { query: { session_id: sessionId },signal });
   return paginated(detections.map(toDetection));
 }
 
@@ -807,6 +807,11 @@ export async function dismissDetection(id: string): Promise<ApiResponse<Detectio
 // joins that session's room (the Live Monitor).
 
 let socket: Socket | null = null;
+const cameraAlertListeners=new Set<(payload:ApiDetection)=>void>();
+export function publishCommittedDetections(detections:ApiDetection[]){
+  for(const detection of detections)for(const receive of cameraAlertListeners)receive(detection);
+  if(detections.length)window.dispatchEvent(new Event('proctorai:detections-saved'));
+}
 
 function getSocket(): Socket {
   if (!socket) {
@@ -841,6 +846,7 @@ export function commitCsvImports(files:CsvImportFiles,hash:string) {return reque
 export function closeLiveConnection() {
   socket?.disconnect();
   socket=null;
+  cameraAlertListeners.clear();
 }
 
 export function subscribeToChanges(onChange: () => void): () => void {
@@ -853,26 +859,30 @@ export function subscribeToChanges(onChange: () => void): () => void {
   const retry = window.setInterval(() => { if (document.visibilityState === 'visible') onChange(); },5000);
   const focus = () => onChange();
   window.addEventListener('focus',focus);
+  window.addEventListener('proctorai:detections-saved',onChange);
   return () => {
     connection.off('sync:changed',onChange);
     connection.off('connect',onChange);
     connection.off('disconnect',onChange);
     window.clearInterval(retry);
     window.removeEventListener('focus',focus);
+    window.removeEventListener('proctorai:detections-saved',onChange);
   };
 }
 
 export function subscribeToAlerts(onAlert: (event: DetectionEvent) => void, options?: { sessionId?: string }): () => void {
   const connection = getSocket();
-  const handler = (payload: ApiDetection) => onAlert(toDetection(payload));
+  const handler = (payload: ApiDetection) => {if(!options?.sessionId||payload.session_id===options.sessionId)onAlert(toDetection(payload));};
   const join = () => {
     if (options?.sessionId) connection.emit('join_session', { session_id: options.sessionId });
   };
   connection.on('alert:new', handler);
+  cameraAlertListeners.add(handler);
   connection.on('connect', join);
   if (connection.connected) join();
   return () => {
     connection.off('alert:new', handler);
+    cameraAlertListeners.delete(handler);
     connection.off('connect', join);
   };
 }

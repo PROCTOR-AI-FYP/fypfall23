@@ -26,3 +26,7 @@ test('removed objects and expired observations cannot retain a display box',()=>
   assert.deepEqual(tracker.update(frame(0,false),100),[]);
   assert.deepEqual(tracker.update(frame(),8000),[]);
 });
+test('room display tracking cannot move a box into another student region',()=>{
+  const tracker=new ObjectOverlayTracker();tracker.set([object],frame(),0);
+  assert.deepEqual(tracker.update(frame(130),200,[0,0,.48,1]),[]);
+});

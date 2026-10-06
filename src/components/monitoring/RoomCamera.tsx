@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { request, type SessionSeatMap } from '@/lib/api';
+import { request,publishCommittedDetections,type ApiDetection,type SessionSeatMap } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/FormElements';
-import type { CameraObject } from '@/lib/vision/object-tracking';
+import { ObjectOverlayTracker,type CameraObject } from '@/lib/vision/object-tracking';
+import type { RoomHeadState } from '@/lib/vision/room-head-pose';
 
 type Region={seat_number:number;box:number[]};
 type Pose={seat_number:number;state:string;calibrated:boolean;calibrating:boolean;calibration_progress:number;
-  sustained:boolean;violating:boolean;review_enabled:boolean;yaw:number|null;pitch:number|null;face_box:number[]|null};
-type HeadResult={seats:Pose[];alerts:unknown[];alert_error:string|null;image_size:number[]};
+  sustained:boolean;violating:boolean;review_enabled:boolean;yaw:number|null;pitch:number|null;roll:number|null;face_box:number[]|null};
+type HeadResult={seats:Pose[];alerts:unknown[];detections?:ApiDetection[];alert_error:string|null;image_size:number[]};
 type ObjectResult={objects:(CameraObject&{seat_number:number})[];ai_seconds:number;alert:unknown|null;
-  alerts:unknown[];alert_error:string|null;warning:string|null;checked_seat:number|null;mapped_seats:number;review_observations:number;review_status:string};
-type Capture={stream:MediaStream;run:string|null;abort:AbortController;timers:Set<number>;stopped:boolean;layoutKey:string;dimensions:number[]};
+  alerts:unknown[];detections?:ApiDetection[];alert_error:string|null;warning:string|null;checked_seat:number|null;mapped_seats:number;review_observations:number;review_status:string};
+type Capture={stream:MediaStream;run:string|null;abort:AbortController;timers:Set<number>;stopped:boolean;layoutKey:string;dimensions:number[];
+  worker:Worker|null;ready:boolean;headPending:boolean;trackers:Map<number,ObjectOverlayTracker>};
 const poseLabel:Record<string,string>={calibration_required:'Set neutral posture',calibrating:'Calibrating',
   face_forward_to_calibrate:'Face forward to calibrate',no_face:'Face not visible',multiple_faces:'Two faces in this seat region',
   face_too_small:'Face too small for reliable angles',unreliable_face:'Face tracking uncertain',
@@ -22,6 +24,7 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
   const [regions,setRegions]=useState<Region[]>([]),[selected,setSelected]=useState(''),[inspect,setInspect]=useState('');
   const [drag,setDrag]=useState<number[]|null>(null),dragStart=useRef<number[]|null>(null);
   const [error,setError]=useState(''),[objectMessage,setObjectMessage]=useState(''),[headError,setHeadError]=useState('');
+  const [previewError,setPreviewError]=useState(''),[workerReady,setWorkerReady]=useState(false),[verifiedPoses,setVerifiedPoses]=useState<Pose[]>([]);
   const [poses,setPoses]=useState<Pose[]>([]),[objects,setObjects]=useState<(CameraObject&{seat_number:number})[]>([]);
   const [saved,setSaved]=useState(0),[ratio,setRatio]=useState(16/9),[imageSize,setImageSize]=useState([1600,900]);
   const [devices,setDevices]=useState<MediaDeviceInfo[]>([]),[device,setDevice]=useState('');
@@ -31,10 +34,11 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
   const stop=useCallback((message='')=>{
     const state=capture.current;capture.current=null;
     if(state){state.stopped=true;state.abort.abort();state.timers.forEach(window.clearTimeout);
+      state.worker?.terminate();
       state.stream.getTracks().forEach(t=>t.stop());
       if(state.run)void request('POST',`/api/device-camera/${state.run}/stop`,{keepalive:true}).catch(()=>{});}
     if(video.current)video.current.srcObject=null;
-    if(mounted.current){setPhase('stopped');setPoses([]);setObjects([]);setHeadError('');setCalibrating(false);if(message)setError(message);}
+    if(mounted.current){setPhase('stopped');setPoses([]);setVerifiedPoses([]);setObjects([]);setHeadError('');setPreviewError('');setWorkerReady(false);setCalibrating(false);if(message)setError(message);}
   },[]);
   useEffect(()=>{
     mounted.current=true;
@@ -57,7 +61,7 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
         ...(device?{deviceId:{exact:device}}:{facingMode:{ideal:'environment'}})}});
       if(!mounted.current||document.hidden){stream.getTracks().forEach(t=>t.stop());return;}
       const layoutKey=`proctorai-room-layout:${sessionId}:${stream.getVideoTracks()[0].getSettings().deviceId||device||'default'}`;
-      const state:Capture={stream,run:null,abort:new AbortController(),timers:new Set(),stopped:false,layoutKey,dimensions:[]};capture.current=state;
+      const state:Capture={stream,run:null,abort:new AbortController(),timers:new Set(),stopped:false,layoutKey,dimensions:[],worker:null,ready:false,headPending:false,trackers:new Map()};capture.current=state;
       stream.getVideoTracks()[0].onended=()=>stop('Room camera disconnected.');
       video.current!.srcObject=stream;await video.current!.play();
       if(capture.current!==state)return;
@@ -77,13 +81,17 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
       setError(failure.name==='NotAllowedError'?'Allow camera access for this website, then retry.':failure.message);}
     finally{opening.current=false;if(!capture.current)setPhase('stopped');}
   };
-  const sample=async()=>{
+  const sample=async(withReference=false)=>{
     const source=video.current!;
     if(!source.videoWidth)throw Error('Waiting for camera image.');
     const scale=Math.min(1,1600/source.videoWidth,1200/source.videoHeight);
     const canvas=document.createElement('canvas');canvas.width=Math.round(source.videoWidth*scale);canvas.height=Math.round(source.videoHeight*scale);
     canvas.getContext('2d')!.drawImage(source,0,0,canvas.width,canvas.height);
-    return new Promise<Blob>((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(Error('Camera sample failed.')),'image/jpeg',.85));
+    let reference:ImageData|null=null;
+    if(withReference){const image=document.createElement('canvas');image.width=320;image.height=Math.round(320*canvas.height/canvas.width);
+      const context=image.getContext('2d',{willReadFrequently:true})!;context.drawImage(canvas,0,0,image.width,image.height);reference=context.getImageData(0,0,image.width,image.height);}
+    const jpeg=await new Promise<Blob>((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(Error('Camera sample failed.')),'image/jpeg',.85));
+    return {jpeg,reference};
   };
   const begin=async()=>{
     const state=capture.current;if(!state||starting||state.run)return;
@@ -95,22 +103,56 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
       try{sessionStorage.setItem(state.layoutKey,JSON.stringify({roster,dimensions:state.dimensions,regions}));}catch{/* Mapping still works when browser storage is unavailable. */}
       setPhase('running');setObjectMessage('Scanning mapped student regions…');
       const schedule=(fn:()=>void,delay:number)=>{if(!state.stopped){const timer=window.setTimeout(()=>{state.timers.delete(timer);fn();},delay);state.timers.add(timer);}};
+      state.worker=new Worker('/vision/head.worker.js');
+      state.worker.onmessage=event=>{
+        if(capture.current!==state)return;
+        if(event.data.type==='ready'){state.ready=true;setWorkerReady(true);}
+        if(event.data.type==='room-pose'){
+          state.headPending=false;const size:number[]=event.data.image_size;
+          setImageSize(size);setPreviewError('');
+          setPoses(event.data.seats.map((p:RoomHeadState)=>({...p,review_enabled:false,face_box:p.box?.map((v,i)=>v*size[i%2])||null})));
+        }
+        if(event.data.type==='error'){state.headPending=false;setPreviewError('Device head tracking: '+event.data.message);}
+      };
+      state.worker.onerror=()=>{state.headPending=false;setPreviewError('Device head tracking could not load; server verification continues.');};
+      state.worker.postMessage({type:'init',mode:'room',regions,origin:window.location.origin});
+      const preview=document.createElement('canvas'),context=preview.getContext('2d',{willReadFrequently:true})!;
+      const draw=async()=>{
+        if(state.stopped)return;
+        const source=video.current;
+        if(source?.videoWidth){
+          preview.width=320;preview.height=Math.round(320*source.videoHeight/source.videoWidth);context.drawImage(source,0,0,preview.width,preview.height);
+          const current=context.getImageData(0,0,preview.width,preview.height),tracked=[];
+          for(const region of regions){const tracker=state.trackers.get(region.seat_number);if(tracker)tracked.push(...tracker.update(current,performance.now(),region.box).map(o=>({...o,seat_number:region.seat_number})));}
+          setObjects(tracked);
+          if(state.ready&&!state.headPending){
+            state.headPending=true;
+            try{const scale=Math.min(1,1600/source.videoWidth,1200/source.videoHeight);
+              const bitmap=await createImageBitmap(source,{resizeWidth:Math.round(source.videoWidth*scale),resizeHeight:Math.round(source.videoHeight*scale)});
+              if(!state.stopped)state.worker!.postMessage({type:'frame',bitmap,timestamp:performance.now()},[bitmap]);else bitmap.close();
+            }catch(reason){state.headPending=false;setPreviewError((reason as Error).message);}
+          }
+        }
+        schedule(()=>void draw(),120);
+      };
+      void draw();
       const failed=(reason:unknown,head:boolean)=>{
         if(state.stopped)return;
         const failure=reason as {status?:number;message:string};
         if([401,403,404,409,410].includes(failure.status??0)){stop(failure.message);return;}
         const message=failure.status===429?'Verifier busy; retrying…':failure.message;
-        if(head)setHeadError(message);else{setObjectMessage(message);setObjects([]);}
+        if(head){setHeadError(message);setVerifiedPoses([]);}else{setObjectMessage(message);state.trackers.clear();setObjects([]);}
       };
       let headIndex=0,objectIndex=0;
       const heads=async()=>{
         if(state.stopped)return;
         try{
           const result=await request<HeadResult>('POST',`/api/device-camera/${state.run}/room/head/frame`,{
-            query:{frame_index:headIndex++},rawBody:await sample(),signal:AbortSignal.any([state.abort.signal,AbortSignal.timeout(20000)])});
+            query:{frame_index:headIndex++},rawBody:(await sample()).jpeg,signal:AbortSignal.any([state.abort.signal,AbortSignal.timeout(20000)])});
           if(state.stopped)return;
-          setPoses(result.seats);setImageSize(result.image_size);setHeadError(result.alert_error||'');
-          setCalibrating(result.seats.some(s=>s.calibrating));
+          setVerifiedPoses(result.seats);setHeadError(result.alert_error||'');
+          if(!state.ready){setPoses(result.seats);setImageSize(result.image_size);}
+          publishCommittedDetections(result.detections||[]);
           if(result.alerts.length)setSaved(n=>n+result.alerts.length);
         }catch(reason){failed(reason,true);}
         schedule(()=>void heads(),200);
@@ -118,18 +160,19 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
       const checkObjects=async()=>{
         if(state.stopped)return;
         try{
+          const captured=await sample(true);
           const result=await request<ObjectResult>('POST',`/api/device-camera/${state.run}/room/frame`,{
-            query:{frame_index:objectIndex++},rawBody:await sample(),signal:AbortSignal.any([state.abort.signal,AbortSignal.timeout(45000)])});
+            query:{frame_index:objectIndex++},rawBody:captured.jpeg,signal:AbortSignal.any([state.abort.signal,AbortSignal.timeout(45000)])});
           if(state.stopped)return;
-          setObjects(result.objects);
+          const observed=regions.filter(r=>result.checked_seat===null||r.seat_number===result.checked_seat);
+          for(const region of observed){let tracker=state.trackers.get(region.seat_number);if(!tracker){tracker=new ObjectOverlayTracker();state.trackers.set(region.seat_number,tracker);}
+            tracker.set(result.objects.filter(o=>o.seat_number===region.seat_number),captured.reference!,performance.now(),Math.min(20000,Math.max(7000,(result.ai_seconds*1.5+2)*1000)));}
+          publishCommittedDetections(result.detections||[]);
           const savedCount=result.alerts?.length??(result.alert?1:0);if(savedCount)setSaved(n=>n+savedCount);
           const decision:Record<string,string>={saved:'Review alert saved',cooldown:'Verified; repeat alert cooldown active',
             below_review_cutoff:'Below the administrator’s composite review cutoff',below_signal_threshold:'Below the administrator’s signal threshold',
             confirming:`${result.review_observations}/3 recognitions; hold the object visible`,no_verified_object:'No verified phone or book'};
           setObjectMessage(result.alert_error||result.warning||`${result.checked_seat===null?'Whole classroom checked':`Detail check: seat ${result.checked_seat}`} · ${result.ai_seconds.toFixed(1)}s · ${result.mapped_seats} mapped seats · ${decision[result.review_status]||''}`);
-          // Returned boxes refer to a sampled frame; expire them rather than
-          // retaining a stale box on a different student between slow checks.
-          schedule(()=>setObjects([]),Math.min(6000,Math.max(1000,result.ai_seconds*1000)));
         }catch(reason){failed(reason,false);}
         schedule(()=>void checkObjects(),500);
       };
@@ -140,8 +183,10 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
   const calibrate=async()=>{
     const state=capture.current;if(!state?.run)return;
     setCalibrating(true);setHeadError('');
+    state.worker?.postMessage({type:'calibrate'});
     try{await request('POST',`/api/device-camera/${state.run}/head/calibrate`,{signal:state.abort.signal});}
-    catch(reason){if(!state.stopped){setHeadError((reason as Error).message);setCalibrating(false);}}
+    catch(reason){if(!state.stopped)setHeadError((reason as Error).message);}
+    finally{if(!state.stopped)setCalibrating(false);}
   };
   const point=(event:React.PointerEvent<SVGSVGElement>)=>{
     const bounds=event.currentTarget.getBoundingClientRect();
@@ -188,16 +233,24 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
           <Button variant="secondary" onClick={()=>setRegions(r=>r.filter(s=>s.seat_number!==Number(selected)))}>Clear this region</Button>
           <span className="text-label">{regions.length}/{assignments.length} mapped</span>
           <Button disabled={starting||regions.length!==assignments.length} onClick={()=>void begin()}>{starting?'Starting…':'Begin room monitoring'}</Button></div></>}
-      {phase==='running'&&<><div className="flex flex-wrap items-center gap-2"><Select aria-label="Inspect seat (view only)" value={inspect} onChange={e=>setInspect(e.target.value)}><option value="">Whole classroom</option>{assignments.map(s=><option key={s.seat_number} value={s.seat_number}>Inspect seat {s.seat_number} · {s.student_name}</option>)}</Select>
-        <Button variant="secondary" disabled={calibrating} onClick={()=>void calibrate()}>{calibrating?'Calibrating…':'Set neutral for all seats'}</Button></div>
+      {phase==='running'&&<><div className="flex flex-wrap items-center gap-2"><Select aria-label="Highlight seat (all seats stay monitored)" value={inspect} onChange={e=>setInspect(e.target.value)}><option value="">All students</option>{assignments.map(s=><option key={s.seat_number} value={s.seat_number}>Highlight seat {s.seat_number} · {s.student_name}</option>)}</Select>
+        <Button variant="secondary" disabled={calibrating} onClick={()=>void calibrate()}>{calibrating?'Setting neutral…':'Set neutral for all seats'}</Button></div>
         <p className="text-body-sm" role="status">{objectMessage}</p>
-        <p className="text-body-sm">{poses.filter(p=>p.calibrated).length}/{assignments.length} head poses calibrated. Ask students to face forward and hold still while setting neutral.</p>
-        <div className="max-h-56 overflow-auto grid gap-2 sm:grid-cols-2">{poses.filter(p=>!inspect||String(p.seat_number)===inspect).map(p=><p key={p.seat_number} className={`text-body-sm ${p.sustained?'text-(--color-error)':''}`}>Seat {p.seat_number} · {poseLabel[p.state]||p.state}{p.sustained&&!p.review_enabled?' · below administrator’s review policy':''}{p.calibrating?` ${Math.round(p.calibration_progress*100)}%`:p.yaw!==null?` · yaw ${p.yaw.toFixed(0)}° · pitch ${p.pitch?.toFixed(0)}°`:''}</p>)}</div></>}
+        <p className="text-body-sm">{poses.filter(p=>p.calibrated).length}/{assignments.length} head poses calibrated. {verifiedPoses.filter(p=>p.calibrated).length}/{assignments.length} server-verified. {workerReady?'Live device head tracking active.':'Loading device head tracking…'} Ask students to face forward and hold still while setting neutral.</p></>}
+      <section aria-label="Head pose for all students" className="space-y-2"><h3 className="text-heading">Head pose · all students</h3>
+        <p className="text-label text-(--color-text-muted)">Live angles run on this device for every mapped seat. The server independently verifies sustained warnings before saving an alert.</p>
+        <div className="max-h-64 overflow-auto grid gap-2 sm:grid-cols-2">{assignments.map(student=>{const p=poses.find(p=>p.seat_number===student.seat_number),verified=verifiedPoses.find(p=>p.seat_number===student.seat_number);
+          return <div key={student.seat_number} role="group" aria-label={`Head pose seat ${student.seat_number}`} className="rounded border border-(--color-border-default) p-3 text-body-sm">
+            <p className="font-medium">Seat {student.seat_number} · {student.student_name}</p><p className="text-label text-(--color-text-muted)">{student.registration_no}</p>
+            <p className={p?.sustained?'text-(--color-error)':p?.violating?'text-(--color-warning)':''}>{p?poseLabel[p.state]||p.state:phase==='running'?'Loading head tracking…':'Start camera and map this seat.'}{p?.calibrating?` ${Math.round(p.calibration_progress*100)}%`:''}</p>
+            {p?.yaw!==null&&p?.yaw!==undefined&&<p className="tabular-nums">Yaw {p.yaw.toFixed(1)}° · Pitch {p.pitch?.toFixed(1)}° · Roll {p.roll?.toFixed(1)}°</p>}
+            {verified?.sustained&&<p>{verified.review_enabled?'Sustained warning verified; repeat alerts use a 30-second cooldown.':'Verified warning below the administrator’s review policy.'}</p>}
+          </div>;})}</div></section>
       {!!saved&&<p role="status" className="text-body-sm text-(--color-success)">{saved} live {saved===1?'alert':'alerts'} saved to this exam’s review workflow.</p>}
       {!assignments.length&&<p className="text-body-sm text-(--color-warning)">Upload a fully resolved student seating CSV before monitoring.</p>}
       {assignments.length>64&&<p className="text-body-sm text-(--color-warning)">This hosted camera supports up to 64 mapped seats per room.</p>}
       <p className="text-label text-(--color-text-muted)">Keep the camera fixed after mapping. All seats share this camera; inspecting a seat only highlights its region. Head pose is checked independently for each visible face. Object checks scan the whole classroom, with seat detail checks for smaller objects, and need three recognitions spanning at least three seconds. Small or obscured faces, and objects on seat boundaries, cannot create attributed alerts. Check scan timing and camera detail before an exam; alerts require human review.</p>
-      {(error||headError)&&<p role="alert" className="text-body-sm text-(--color-error)">{error||headError}</p>}
+      {(error||headError||previewError)&&<p role="alert" className="text-body-sm text-(--color-error)">{error||headError||previewError}</p>}
     </div>
   </section>;
 }
