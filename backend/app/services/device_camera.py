@@ -20,27 +20,11 @@ from app.config import settings
 from app.models import BehaviourType
 from app.schemas import DetectionEventIn
 from app.services.detection import DetectionConfig
+from app.services.signal_policy import object_signal_score
 
 logger = logging.getLogger('proctorai.device-camera')
 MAX_IMAGE_BYTES = 1024 * 1024
 IDLE_SECONDS = 90
-
-def object_signal_score(signal: str, model_confidence: float) -> float:
-    """Review-policy strength, not a model probability or probability of guilt.
-
-    The detector's verified class threshold maps to the existing default review
-    threshold (.80). Raw neural confidence remains unchanged in camera overlays
-    and evidence annotations. Admin sensitivity applies to this policy scale.
-    """
-    if signal not in ('PHONE_DETECTED', 'UNAUTHORISED_OBJECT'):
-        raise ValueError('Unsupported object signal')
-    if not math.isfinite(model_confidence) or not 0 <= model_confidence <= 1:
-        raise ValueError('Invalid model confidence')
-    floor = .50 if signal == 'PHONE_DETECTED' else .60
-    if model_confidence <= floor:
-        return round(.8 * max(0., model_confidence) / floor, 3)
-    return round(min(1., .8 + .2 * (model_confidence-floor)/(1-floor)), 3)
-
 
 def decode_frame(data: bytes):
     import cv2

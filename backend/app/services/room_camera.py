@@ -77,9 +77,12 @@ class RoomState:
     source: object | None = None
     cursor: int = 0
     focused_samples: int = 0
+    focused_started: float | None = None
     shape: tuple | None = None
     last_objects: list = field(default_factory=list)
     previous_faces: dict = field(default_factory=dict)
+    wide_detector: object | None = None
+    wide_samples: int = 0
 
     @classmethod
     def create(cls, run, regions, students):
@@ -148,12 +151,47 @@ class RoomState:
         return states
 
     def objects(self, frame, model):
-        """Bound CPU work to one seat per request; retain a positive seat for
-        three independent samples before continuing the scan. Unchecked seats
-        receive no synthetic absence or score. Every check reports its coverage.
+        """Check the whole room first. If no attributable object is verified,
+        scan one native seat crop and retain a positive crop for confirmation.
+        Full-frame observations score all implicated seats in the same sample.
         """
         from app.vision.phone import PhoneDetector
+        from dataclasses import replace
         self.check_shape(frame)
+        elapsed = 0.
+        # Periodic native checks also cover small objects in other seats while
+        # a readily visible object remains in the wide image.
+        if not self.focused_samples and self.wide_samples<3:
+            if self.wide_detector is None:
+                self.wide_detector = PhoneDetector(model=model,use_tiling=False,full_imgsz=640,min_hits=1,track_ttl=90)
+            scene_events = self.wide_detector.process_frame(frame)
+            elapsed = self.wide_detector.last_inference_seconds
+            h,w = frame.shape[:2]
+            grouped = {seat:[] for seat in self.seats}
+            objects = []
+            for event in scene_events:
+                if event.confidence < (.50 if event.type=='PHONE_DETECTED' else .60):
+                    continue
+                box = [v/(h if i%2 else w) for i,v in enumerate(event.box)]
+                seat = assign_box(box,self.regions)
+                if seat is None:
+                    continue
+                # Global and crop tracker IDs have independent confirmation
+                # histories, even when both trackers issue numeric ID 1.
+                identity = f'wide:{event.track_id}'
+                grouped[seat].append(replace(event,track_id=identity))
+                objects.append(dict(label=event.label,type=event.type,confidence=event.confidence,
+                    track_id=identity,confirmed=True,box=box,seat_number=seat))
+            if objects:
+                self.wide_samples += 1
+                return None, grouped, objects, elapsed, None
+            # No global recognition: old global positives must not bridge this
+            # negative scene, while the independently sampled crop can continue.
+            for target in self.seats.values():
+                for key in list(target.histories):
+                    if isinstance(key[1],str) and key[1].startswith('wide:'):
+                        target.histories.pop(key)
+        self.wide_samples = 0
         region = self.regions[self.cursor]
         target = self.seats[region.seat_number]
         h,w = frame.shape[:2]
@@ -163,14 +201,12 @@ class RoomState:
             target.histories.clear()
             self.cursor = (self.cursor+1)%len(self.regions)
             self.focused_samples = 0
-            return target, [], [], 0., 'Region is too small in the camera image; improve camera coverage.'
+            self.focused_started = None
+            return target, [], [], elapsed, 'Region is too small in the camera image; improve camera coverage.'
         if target.detector is None:
             target.detector = PhoneDetector(model=model,use_tiling=False,full_imgsz=640,min_hits=1,track_ttl=90)
         events = target.detector.process_frame(crop)
-        self.focused_samples = self.focused_samples+1 if events else 0
-        if not events or self.focused_samples>=3:
-            self.cursor = (self.cursor+1)%len(self.regions)
-            self.focused_samples = 0
+        events = [e for e in events if e.confidence >= (.50 if e.type=='PHONE_DETECTED' else .60)]
         objects = []
         for event in events:
             local = event.box
@@ -184,17 +220,29 @@ class RoomState:
                                 track_id=event.track_id,confirmed=True,box=box,seat_number=target.seat_number))
         valid_ids = {o['track_id'] for o in objects}
         events = [event for event in events if event.track_id in valid_ids]
-        return target, events, objects, target.detector.last_inference_seconds, None
+        now = time.monotonic()
+        if events:
+            if not self.focused_samples:
+                self.focused_started = now
+            self.focused_samples += 1
+        if not events or (self.focused_samples>=3 and now-self.focused_started>=3):
+            self.cursor = (self.cursor+1)%len(self.regions)
+            self.focused_samples = 0
+            self.focused_started = None
+        return target, events, objects, elapsed+target.detector.last_inference_seconds, None
 
-    def evidence(self, frame, seat, *, objects=False):
+    def evidence(self, frame, seat, *, objects=None):
         """Limit the saved snapshot to this student's camera region."""
         import cv2
         region = next(r for r in self.regions if r.seat_number==seat)
         h,w = frame.shape[:2]
         x1,y1,x2,y2 = [round(v*(h if i%2 else w)) for i,v in enumerate(region.box)]
         crop = frame[y1:y2,x1:x2].copy()
-        target = self.seats[seat]
-        if objects and target.detector is not None:
-            crop = target.detector.annotate_frame(crop)
+        for obj in objects or []:
+            if obj['seat_number']!=seat:
+                continue
+            a,b,c,d = [round(v*(h if i%2 else w)) for i,v in enumerate(obj['box'])]
+            cv2.rectangle(crop,(a-x1,b-y1),(c-x1,d-y1),(0,180,255),2)
+            cv2.putText(crop,f"{obj['label']} {obj['confidence']:.0%}",(a-x1,max(40,b-y1-6)),cv2.FONT_HERSHEY_SIMPLEX,.5,(0,180,255),2)
         cv2.putText(crop, f'Seat {seat}', (8,22), cv2.FONT_HERSHEY_SIMPLEX,.6,(80,210,100),2)
         return crop

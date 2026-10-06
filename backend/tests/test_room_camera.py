@@ -187,3 +187,81 @@ async def test_room_head_endpoint_creates_only_the_violating_students_case(clien
     assert results[-1]['seats'][0]['sustained'] is False
     repeated=await client.post(f'/api/device-camera/{run.run_id}/room/head/frame?frame_index=22',headers={**headers,'Content-Type':'image/jpeg'},content=jpeg())
     assert repeated.status_code==409
+
+
+def test_whole_frame_objects_are_grouped_for_all_seats_with_independent_track_ids():
+    from app.vision.phone import DetectionEvent
+    run=DeviceRun('teacher','exam');room=RoomState.create(run,RoomStart(regions=REGIONS).regions,{14:'A',25:'B'})
+    events=[DetectionEvent('PHONE_DETECTED',.9,0,(80,140,130,220),'phone',1),
+            DetectionEvent('UNAUTHORISED_OBJECT',.9,0,(440,140,540,240),'book',2),
+            DetectionEvent('PHONE_DETECTED',.9,0,(300,140,340,220),'phone',3)]
+    room.wide_detector=SimpleNamespace(process_frame=lambda f:events,last_inference_seconds=.01)
+    target,grouped,objects,seconds,warning=room.objects(np.zeros((360,640,3),np.uint8),None)
+    assert target is None
+    assert {seat:len(rows) for seat,rows in grouped.items()}=={14:1,25:1}
+    assert grouped[14][0].track_id=='wide:1'
+    assert len(objects)==2 and all(o['track_id'].startswith('wide:') for o in objects)
+    assert all(s.detector is None for s in room.seats.values())
+
+
+def test_fast_detail_checks_keep_same_seat_until_confirmation_time(monkeypatch):
+    from app.vision.phone import DetectionEvent
+    from app.services import room_camera
+    run=DeviceRun('teacher','exam');room=RoomState.create(run,RoomStart(regions=REGIONS).regions,{14:'A',25:'B'})
+    room.wide_detector=SimpleNamespace(process_frame=lambda f:[],last_inference_seconds=.01)
+    event=DetectionEvent('PHONE_DETECTED',.9,0,(80,140,130,220),'phone',1)
+    room.seats[14].detector=SimpleNamespace(process_frame=lambda f:[event],last_inference_seconds=.01)
+    clock=[0.]
+    monkeypatch.setattr(room_camera.time,'monotonic',lambda:clock[0])
+    frame=np.zeros((360,640,3),np.uint8)
+    for now in [0,.5,1,2.9]:
+        clock[0]=now
+        target,events,*_=room.objects(frame,None)
+        assert target.seat_number==14 and events and room.cursor==0
+    clock[0]=3.1
+    assert room.objects(frame,None)[0].seat_number==14
+    assert room.cursor==1 and room.focused_samples==0
+
+
+def test_visible_wide_object_does_not_starve_other_seats_detail_checks():
+    from app.vision.phone import DetectionEvent
+    run=DeviceRun('teacher','exam');room=RoomState.create(run,RoomStart(regions=REGIONS).regions,{14:'A',25:'B'})
+    phone=DetectionEvent('PHONE_DETECTED',.9,0,(80,140,130,220),'phone',1)
+    book=DetectionEvent('UNAUTHORISED_OBJECT',.9,0,(80,140,180,220),'book',1)
+    room.wide_detector=SimpleNamespace(process_frame=lambda f:[phone],last_inference_seconds=.01)
+    room.seats[14].detector=SimpleNamespace(process_frame=lambda f:[],last_inference_seconds=.01)
+    room.seats[25].detector=SimpleNamespace(process_frame=lambda f:[book],last_inference_seconds=.01)
+    frame=np.zeros((360,640,3),np.uint8)
+    for cycle in range(2):
+        for _ in range(3):assert room.objects(frame,None)[0] is None
+        target,events,objects,*_=room.objects(frame,None)
+        assert target.seat_number==[14,25][cycle]
+    assert events[0].label=='book' and objects[0]['seat_number']==25
+
+
+async def test_one_room_sample_can_save_two_separate_student_cases(client,admin_conn,active_session,device,monkeypatch):
+    from app.services import storage
+    from app.services.device_camera import decode_frame,time
+    class Storage:
+        async def upload(self,*args):pass
+        async def delete(self,*args):pass
+    monkeypatch.setattr(storage,'get_storage',lambda:Storage())
+    await add_second_student(admin_conn,active_session)
+    headers=auth(await login(client,TEACHER_EMAIL))
+    started=await client.post(f'/api/sessions/{active_session}/device-camera/room/start',headers=headers,json={'regions':REGIONS})
+    run=device.runs[started.json()['run_id']]
+    def infer(target,data):
+        rows={}
+        for seat,signal in [(14,'PHONE_DETECTED'),(25,'UNAUTHORISED_OBJECT')]:
+            identity=f'wide:{seat}'
+            target.room.seats[seat].histories[(signal,identity)]=[(time.monotonic()-4,.96),(time.monotonic()-2,.96)]
+            rows[seat]=[SimpleNamespace(type=signal,confidence=.92,track_id=identity)]
+        return decode_frame(data),None,rows,[],.01,None
+    monkeypatch.setattr(device,'_infer',infer)
+    response=await client.post(f'/api/device-camera/{run.run_id}/room/frame?frame_index=0',headers={**headers,'Content-Type':'image/jpeg'},content=jpeg())
+    assert response.status_code==200,response.text
+    assert {a['seat_number'] for a in response.json()['alerts']}=={14,25}
+    assert response.json()['checked_seat'] is None
+    rows=await admin_conn.fetch('SELECT seat_number,behaviour_types FROM detection_events WHERE session_id=$1::uuid ORDER BY seat_number',active_session)
+    assert list(rows[0]['behaviour_types'])==['PHONE_DETECTED']
+    assert list(rows[1]['behaviour_types'])==['UNAUTHORISED_OBJECT']

@@ -53,14 +53,15 @@ async def test_camera_cannot_start_completed_exam(client,fake_camera):
     assert response.status_code==409
 
 
-def test_configured_camera_scorer_requires_stability_and_preserves_head_only_warning():
+def test_configured_camera_scorer_supports_head_alone_and_stable_objects():
     scorer=camera.CameraScorer(DetectionConfig())
     for i in range(40):
-        assert scorer.update_scores({'HEAD_POSE_VIOLATION':.65},i*.1) is None
+        head=scorer.update_scores({'HEAD_POSE_VIOLATION':.65},i*.1)
+        assert head.per_signal=={'HEAD_POSE_VIOLATION':.85}
     found=None
     for i in range(40,80):
         found=scorer.update_scores({'HEAD_POSE_VIOLATION':.65,'PHONE_DETECTED':.92},i*.1)
-    assert found is not None and found.score==pytest.approx(.92)
+    assert found is not None and found.score==pytest.approx(.968)
     assert set(found.active_signals)=={'PHONE_DETECTED','HEAD_POSE_VIOLATION'}
     assert scorer.update_scores({},8) is None
 
@@ -70,6 +71,53 @@ def test_admin_sensitivity_controls_camera_scoring():
     config.thresholds[BehaviourType.PHONE_DETECTED]=.98
     scorer=camera.CameraScorer(config)
     for i in range(40): assert scorer.update_scores({'PHONE_DETECTED':.92},i*.1) is None
+
+
+def test_local_camera_cannot_promote_unverified_objects_or_disabled_head():
+    config=DetectionConfig()
+    config.thresholds[BehaviourType.PHONE_DETECTED]=0
+    config.thresholds[BehaviourType.UNAUTHORISED_OBJECT]=0
+    config.thresholds[BehaviourType.HEAD_POSE_VIOLATION]=.9
+    scorer=camera.CameraScorer(config)
+    for i in range(40):
+        assert scorer.update_scores({'PHONE_DETECTED':.49,'UNAUTHORISED_OBJECT':.59,
+                                     'HEAD_POSE_VIOLATION':.65},i*.1) is None
+
+
+def test_local_camera_confirmation_is_not_diluted_and_resets_on_interruption():
+    scorer=camera.CameraScorer(DetectionConfig())
+    found=None
+    for i in range(32):
+        # 75% present: absence governs persistence, not verified strength.
+        found=scorer.update_scores({'PHONE_DETECTED':.51} if i%4 else {},i*.1)
+    assert found.per_signal=={'PHONE_DETECTED':.804}
+    assert scorer.update_scores({'PHONE_DETECTED':.51},4) is None
+    assert scorer.update_scores({'PHONE_DETECTED':.51},4) is None
+    assert scorer.update_scores({'PHONE_DETECTED':.51},3.9) is None
+
+
+def test_local_camera_weights_apply_to_head_and_object_together():
+    config=DetectionConfig(weights={BehaviourType.HEAD_POSE_VIOLATION:1,
+                                    BehaviourType.PHONE_DETECTED:3})
+    scorer=camera.CameraScorer(config)
+    for i in range(32):
+        found=scorer.update_scores({'PHONE_DETECTED':.5,'HEAD_POSE_VIOLATION':.65},i*.1)
+    assert found.score==.813
+    scorer.config=DetectionConfig(weights={BehaviourType.HEAD_POSE_VIOLATION:0,
+                                         BehaviourType.PHONE_DETECTED:0})
+    assert scorer.update_scores({'PHONE_DETECTED':.5,'HEAD_POSE_VIOLATION':.65},3.2) is None
+
+
+@pytest.mark.parametrize('value',[float('nan'),float('inf'),-.1,1.1])
+def test_local_camera_rejects_invalid_model_scores(value):
+    with pytest.raises(ValueError):
+        camera.CameraScorer(DetectionConfig()).update_scores({'PHONE_DETECTED':value},0)
+
+
+@pytest.mark.parametrize('value',[float('nan'),float('inf')])
+def test_local_camera_rejects_invalid_timestamps(value):
+    with pytest.raises(ValueError):
+        camera.CameraScorer(DetectionConfig()).update_scores({},value)
 
 
 async def test_camera_evidence_enters_real_case_hierarchy(client,admin_conn,active_session,fake_camera):
@@ -132,6 +180,17 @@ async def test_camera_emits_alert_only_after_case_commit(client,admin_conn,activ
     await fake_camera.persist({'session_id':active_session,'timestamp':time.time(),'confidence':.92,
         'per_signal':{'PHONE_DETECTED':.92},'snapshot':b'committed evidence'},14,student_id)
     assert seen==[1]
+
+
+async def test_local_camera_preserves_case_when_live_invalidation_fails(client,admin_conn,active_session,fake_camera,monkeypatch):
+    from app import sockets
+    async def fail(): raise RuntimeError('test socket outage')
+    monkeypatch.setattr(sockets,'emit_sync',fail)
+    student_id=str(await admin_conn.fetchval('SELECT id FROM users WHERE email=$1',STUDENT_A_EMAIL))
+    case=await fake_camera.persist({'session_id':active_session,'timestamp':time.time(),'confidence':.85,
+        'per_signal':{'HEAD_POSE_VIOLATION':.85},'snapshot':b'committed head evidence'},14,student_id)
+    assert await admin_conn.fetchval('SELECT count(*) FROM cases WHERE id=$1::uuid',case['id'])==1
+    assert len(list(camera.EVIDENCE_ROOT.rglob('*.jpg')))==1
 
 
 @pytest.mark.parametrize('path',['snapshots/../local-test.jpg',f'snapshots/{uuid.uuid4()}/../escape.jpg','snapshots/not-a-uuid/local-x.jpg'])

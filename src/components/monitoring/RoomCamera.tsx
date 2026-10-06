@@ -9,7 +9,7 @@ type Pose={seat_number:number;state:string;calibrated:boolean;calibrating:boolea
   sustained:boolean;violating:boolean;review_enabled:boolean;yaw:number|null;pitch:number|null;face_box:number[]|null};
 type HeadResult={seats:Pose[];alerts:unknown[];alert_error:string|null;image_size:number[]};
 type ObjectResult={objects:(CameraObject&{seat_number:number})[];ai_seconds:number;alert:unknown|null;
-  alert_error:string|null;warning:string|null;checked_seat:number;mapped_seats:number;review_observations:number;review_status:string};
+  alerts:unknown[];alert_error:string|null;warning:string|null;checked_seat:number|null;mapped_seats:number;review_observations:number;review_status:string};
 type Capture={stream:MediaStream;run:string|null;abort:AbortController;timers:Set<number>;stopped:boolean;layoutKey:string;dimensions:number[]};
 const poseLabel:Record<string,string>={calibration_required:'Set neutral posture',calibrating:'Calibrating',
   face_forward_to_calibrate:'Face forward to calibrate',no_face:'Face not visible',multiple_faces:'Two faces in this seat region',
@@ -122,11 +122,11 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
             query:{frame_index:objectIndex++},rawBody:await sample(),signal:AbortSignal.any([state.abort.signal,AbortSignal.timeout(45000)])});
           if(state.stopped)return;
           setObjects(result.objects);
-          if(result.alert)setSaved(n=>n+1);
+          const savedCount=result.alerts?.length??(result.alert?1:0);if(savedCount)setSaved(n=>n+savedCount);
           const decision:Record<string,string>={saved:'Review alert saved',cooldown:'Verified; repeat alert cooldown active',
             below_review_cutoff:'Below the administrator’s composite review cutoff',below_signal_threshold:'Below the administrator’s signal threshold',
             confirming:`${result.review_observations}/3 recognitions; hold the object visible`,no_verified_object:'No verified phone or book'};
-          setObjectMessage(result.alert_error||result.warning||`Seat ${result.checked_seat} checked · ${result.ai_seconds.toFixed(1)}s · ${result.mapped_seats} seats in scan · ${decision[result.review_status]||''}`);
+          setObjectMessage(result.alert_error||result.warning||`${result.checked_seat===null?'Whole classroom checked':`Detail check: seat ${result.checked_seat}`} · ${result.ai_seconds.toFixed(1)}s · ${result.mapped_seats} mapped seats · ${decision[result.review_status]||''}`);
           // Returned boxes refer to a sampled frame; expire them rather than
           // retaining a stale box on a different student between slow checks.
           schedule(()=>setObjects([]),Math.min(6000,Math.max(1000,result.ai_seconds*1000)));
@@ -196,7 +196,7 @@ export function RoomCamera({sessionId,active,seatMap}:{sessionId:string;active:b
       {!!saved&&<p role="status" className="text-body-sm text-(--color-success)">{saved} live {saved===1?'alert':'alerts'} saved to this exam’s review workflow.</p>}
       {!assignments.length&&<p className="text-body-sm text-(--color-warning)">Upload a fully resolved student seating CSV before monitoring.</p>}
       {assignments.length>64&&<p className="text-body-sm text-(--color-warning)">This hosted camera supports up to 64 mapped seats per room.</p>}
-      <p className="text-label text-(--color-text-muted)">Keep the camera fixed after mapping. All seats share this camera; inspecting a seat only highlights its region. Head pose is checked independently for each visible face. Object checks scan seat regions in turn and need three recognitions spanning at least three seconds. Small or obscured faces, and objects on seat boundaries, cannot create attributed alerts. Check scan timing and camera detail before an exam; alerts require human review.</p>
+      <p className="text-label text-(--color-text-muted)">Keep the camera fixed after mapping. All seats share this camera; inspecting a seat only highlights its region. Head pose is checked independently for each visible face. Object checks scan the whole classroom, with seat detail checks for smaller objects, and need three recognitions spanning at least three seconds. Small or obscured faces, and objects on seat boundaries, cannot create attributed alerts. Check scan timing and camera detail before an exam; alerts require human review.</p>
       {(error||headError)&&<p role="alert" className="text-body-sm text-(--color-error)">{error||headError}</p>}
     </div>
   </section>;

@@ -6,6 +6,8 @@ case ingestion transaction. Camera images stay on this PC.
 from __future__ import annotations
 
 import asyncio
+import logging
+import math
 import time
 import uuid
 from collections import deque
@@ -20,6 +22,7 @@ from app.db import acquire_connection
 from app.models import BehaviourType
 from app.schemas import DetectionEventIn
 from app.services.detection import DetectionConfig, get_detection_config
+from app.services.signal_policy import object_signal_score
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 EVIDENCE_ROOT = PROJECT_ROOT / 'ai-engine/.runtime/platform-evidence'
@@ -54,32 +57,50 @@ class CameraScorer:
         self.started = None
 
     def update_scores(self, scores, now):
-        if self.history and (now < self.history[-1][0] or now-self.history[-1][0] > .5):
+        if not math.isfinite(now):
+            raise ValueError('Invalid camera observation time')
+        verified = {}
+        for signal, raw in scores.items():
+            if not math.isfinite(raw) or not 0 <= raw <= 1:
+                raise ValueError('Invalid camera signal confidence')
+            if signal in ('PHONE_DETECTED', 'UNAUTHORISED_OBJECT'):
+                floor = .50 if signal == 'PHONE_DETECTED' else .60
+                if raw >= floor:
+                    verified[signal] = object_signal_score(signal, raw)
+            elif signal == 'HEAD_POSE_VIOLATION' and raw >= .65:
+                # The calibrated head estimator only emits this event after its
+                # own uninterrupted two-second violation timer has completed.
+                verified[signal] = .85
+        duplicate = bool(self.history and now <= self.history[-1][0])
+        if self.history and (duplicate or now-self.history[-1][0] > .5):
             self.history.clear()
             self.started = None
         if self.started is None:
             self.started = now
-        self.history.append((now, dict(scores)))
+        self.history.append((now, verified))
         while len(self.history)>1 and self.history[1][0] < now-3:
             self.history.popleft()
-        if now-self.started < 3 or len(self.history)<2:
+        if duplicate:
             return None
         active = {}
-        for signal in scores:
+        for signal in verified:
             behaviour = BehaviourType(signal)
             threshold = self.config.thresholds[behaviour]
+            if behaviour == BehaviourType.HEAD_POSE_VIOLATION:
+                if verified[signal] >= threshold:
+                    active[behaviour] = verified[signal]
+                continue
+            if now-self.started < 3 or len(self.history)<2:
+                continue
             values = [sample.get(signal,0.) for _,sample in self.history]
-            if sum(value>=threshold for value in values)/len(values) > .6:
-                active[behaviour] = sum(values)/len(values)
-        # Head pose is a contextual warning; it cannot independently create a case.
-        objects = {s:v for s,v in active.items() if s != BehaviourType.HEAD_POSE_VIOLATION}
-        if not objects:
+            qualifying = [value for value in values if value >= threshold and value > 0]
+            if len(qualifying)/len(values) >= .6:
+                active[behaviour] = sum(qualifying)/len(qualifying)
+        if not active:
             return None
-        score = self.config.composite(objects)
+        score = self.config.composite(active)
         if score < .75:
             return None
-        if scores.get(BehaviourType.HEAD_POSE_VIOLATION.value):
-            active[BehaviourType.HEAD_POSE_VIOLATION] = scores[BehaviourType.HEAD_POSE_VIOLATION.value]
         return CameraAlert(score, [s.value for s in active], now, {s.value:round(v,3) for s,v in active.items()})
 
 
@@ -183,7 +204,10 @@ class PlatformCamera:
         except Exception:
             destination.unlink(missing_ok=True)
             raise
-        await emit_sync()
+        try:
+            await emit_sync()
+        except Exception:
+            logging.getLogger('proctorai.camera').exception('Live invalidation failed after local camera case commit')
         return case.model_dump(mode='json')
 
 

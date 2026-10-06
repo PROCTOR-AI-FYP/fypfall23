@@ -158,7 +158,11 @@ class ObjectMonitor:
                 if pending is not None and pending.done():
                     try:
                         recorded = pending.result()
-                        last_sent[submitted['type']] = now
+                        if hasattr(scorer, 'config'):
+                            for signal in submitted['per_signal']:
+                                last_sent[signal] = now
+                        else:
+                            last_sent[submitted['type']] = now
                         self._publish(last_alert=recorded, alert_error=None)
                     except Exception:
                         self._publish(alert_error='Could not save the alert. Monitoring will retry.')
@@ -168,14 +172,26 @@ class ObjectMonitor:
                     signals = {e.type for e in events}
                     if head_signal is not None and now-last_head <= .5:
                         signals.add(head_signal.type)
-                    signal_scores = {e.type: e.confidence for e in events}
+                    signal_scores = {}
+                    for event in events:
+                        signal_scores[event.type] = max(signal_scores.get(event.type,0.),event.confidence)
                     if head_signal is not None and now-last_head <= .5:
                         signal_scores[head_signal.type] = head_signal.confidence
                     alert = (scorer.update_scores(signal_scores, time.time())
                              if hasattr(scorer, 'update_scores') else scorer.update(signals, time.time()))
                     if alert:
+                        if hasattr(scorer, 'config'):
+                            # The platform uses per-signal cooldowns: adding a
+                            # phone cannot re-submit a recently saved head alert.
+                            from app.models import BehaviourType
+                            eligible = {s:v for s,v in alert.per_signal.items()
+                                        if now-last_sent.get(s, -float('inf')) >= 30}
+                            strength = scorer.config.composite({BehaviourType(s):v for s,v in eligible.items()})
+                            from dataclasses import replace
+                            alert = replace(alert,score=strength,active_signals=list(eligible),per_signal=eligible) if strength >= .75 else None
+                    if alert:
                         kind = '+'.join(sorted(alert.active_signals))
-                        if (pending is None and now-last_sent.get(kind, -float('inf')) >= 20
+                        if (pending is None and (hasattr(scorer, 'config') or now-last_sent.get(kind, -float('inf')) >= 20)
                                 and now-last_attempt >= 5):
                             submitted = dict(session_id=session_id, type=kind,
                                              confidence=alert.score, timestamp=alert.timestamp)

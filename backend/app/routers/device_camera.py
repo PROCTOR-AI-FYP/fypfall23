@@ -267,21 +267,31 @@ async def room_frame(run_id: UUID, request: Request, frame_index: int = Query(ge
         current = await resolve_session_user(conn,request.cookies.get(settings.session_cookie_name))
         await verify_room(conn,run,current)
         config = await get_detection_config(conn)
-    scores = target.observe(events,time.monotonic(),config)
-    if scores and head_epoch == run.head_epoch and sampled_heads.get(target.seat_number,0.) >= config.thresholds[BehaviourType.HEAD_POSE_VIOLATION]:
-        scores['HEAD_POSE_VIOLATION'] = sampled_heads[target.seat_number]
-    alert,error = await save_alert(target,request,scene,scores,
-        evidence=run.room.evidence(scene,target.seat_number,objects=True))
-    observations = min(3,max((len(h) for h in target.histories.values()),default=0))
-    if error:
-        review_status = 'failed'
-    elif alert:
-        review_status = 'saved'
-    elif scores:
-        review_status = 'cooldown' if config.composite({BehaviourType(k):v for k,v in scores.items()})>=.75 else 'below_review_cutoff'
-    else:
-        review_status = 'confirming' if observations else 'below_signal_threshold' if objects else 'no_verified_object'
+    whole_room = target is None
+    batches = [(target,events)] if target is not None else [(run.room.seats[seat],sample) for seat,sample in events.items()]
+    alerts,errors,reviews = [],[],[]
+    for target,observations_in_frame in batches:
+        scores = target.observe(observations_in_frame,time.monotonic(),config)
+        if scores and head_epoch == run.head_epoch and sampled_heads.get(target.seat_number,0.) >= config.thresholds[BehaviourType.HEAD_POSE_VIOLATION]:
+            scores['HEAD_POSE_VIOLATION'] = sampled_heads[target.seat_number]
+        alert,error = await save_alert(target,request,scene,scores,
+            evidence=run.room.evidence(scene,target.seat_number,objects=objects))
+        observations = min(3,max((len(h) for h in target.histories.values()),default=0))
+        if error:
+            decision = 'failed'
+        elif alert:
+            decision = 'saved'
+        elif scores:
+            decision = 'cooldown' if config.composite({BehaviourType(k):v for k,v in scores.items()})>=.75 else 'below_review_cutoff'
+        else:
+            decision = 'confirming' if observations else 'below_signal_threshold' if any(o['seat_number']==target.seat_number for o in objects) else 'no_verified_object'
+        reviews.append({'seat_number':target.seat_number,'observations':observations,'status':decision})
+        if alert:alerts.append(alert)
+        if error:errors.append(error)
+    priority = ['failed','saved','confirming','cooldown','below_review_cutoff','below_signal_threshold','no_verified_object']
+    review_status = min((r['status'] for r in reviews),key=priority.index)
     return {'objects':objects,'ai_seconds':seconds,'frame_index':frame_index,
-            'alert':alert,'alert_error':error,'warning':warning,'checked_seat':target.seat_number,
-            'mapped_seats':len(run.room.seats),
-            'review_observations':observations,'review_status':review_status}
+            'alert':next(iter(alerts),None),'alerts':alerts,'alert_error':next(iter(errors),None),
+            'warning':warning,'checked_seat':None if whole_room else batches[0][0].seat_number,
+            'mapped_seats':len(run.room.seats),'reviews':reviews,
+            'review_observations':max(r['observations'] for r in reviews),'review_status':review_status}

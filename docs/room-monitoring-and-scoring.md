@@ -30,10 +30,17 @@ face detection losing faces in a wide-room image and avoids VIDEO tracking
 carrying one seat's face into another crop. Multiple faces, unclear faces, and
 faces straddling seat regions cannot establish an attributed head warning.
 
-Object inference scans one native seat crop per request to bound CPU load. A
-seat with an object remains selected internally for three recognitions, then
-scanning continues. Unchecked seats receive neither fabricated detections nor
-fabricated absences. A scan explicitly reports the seat and inference duration.
+Object inference first checks the whole room image. Every unambiguously
+attributed, verified object advances its own seat's confirmation in that sample;
+multiple seats can create separate cases in the same request. When the room
+image has no attributable verified object, or after three positive whole-room
+checks, a native seat crop is checked for small objects lost by scene resizing.
+This prevents one obvious phone from starving detail checks elsewhere. A
+positive crop remains selected for
+three recognitions spanning at least three seconds before the whole-room scan
+resumes, including when inference is fast. Full-room and crop
+tracks have separate identities. A scan explicitly reports its scope and
+inference duration; unobserved crop detail supplies no fabricated confirmation.
 An edge-clipped object cannot establish ownership. Saved snapshots contain only
 the implicated student's camera region.
 
@@ -71,6 +78,11 @@ The older internal frame worker also advances missing signals as zero, rejects
 duplicate frame indices, and resets interrupted streams. Its 18-frame window
 requires 11 qualifying observations. The strength is averaged across qualifying
 observations; missing frames control persistence rather than diluting strength.
+The optional local PC camera uses the same object confidence mapping and .85
+head strength. Its calibrated, sustained head event can independently create a
+review case, respects admin thresholds and weights, and shares the 30-second
+per-signal cooldown policy. Its object window requires three seconds with at
+least 60% qualifying samples; camera interruptions reset that window.
 
 ## Integrity and review
 

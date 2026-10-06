@@ -1,5 +1,5 @@
 // Appearance tracking is display-only; server observations create evidence.
-export interface CameraObject {label:string;type:string;confidence:number;track_id:number;confirmed:boolean;box:number[]}
+export interface CameraObject {label:string;type:string;confidence:number;track_id:number|string;confirmed:boolean;box:number[]}
 interface Patch {object:CameraObject;values:number[];norm:number;width:number;height:number;expires:number}
 const grid=8;
 function samples(gray:Uint8Array,width:number,height:number,box:number[]) {
