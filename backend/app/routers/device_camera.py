@@ -200,7 +200,7 @@ async def head_frame(run_id: UUID, request: Request, frame_index: int = Query(ge
     signal = 'HEAD_POSE_VIOLATION'
     scores = {signal:run.head_score} if run.head_score >= config.thresholds[BehaviourType(signal)] else {}
     alert,error = await save_alert(run,request,image,scores,head_only=True)
-    return {'head':state,'alert':alert,'alert_error':error,
+    return {'head':state,'alert':alert,'detections':await committed_detections([alert] if alert else [],request),'alert_error':error,
             'review_enabled':bool(scores)}
 
 
@@ -238,7 +238,7 @@ async def frame(run_id: UUID, request: Request,
                     scores['HEAD_POSE_VIOLATION'] = sampled_head_score
         alert,alert_error = await save_alert(run,request,scene,scores)
     return {'objects': objects, 'ai_seconds': seconds, 'frame_index': frame_index,
-            'alert': alert, 'alert_error': alert_error,
+            'alert': alert, 'detections':await committed_detections([alert] if alert else [],request), 'alert_error': alert_error,
             'review_observations': observations}
 
 

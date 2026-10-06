@@ -57,6 +57,7 @@ async def test_personal_check_available_to_signed_in_roles_and_never_creates_cas
         result=await client.post(f'/api/device-camera/{run}/frame?frame_index=0&head_sustained=true',headers={**headers,'Content-Type':'image/jpeg'},content=jpeg())
         assert result.status_code==200 and result.json()['objects'][0]['label']=='phone'
         assert result.json()['alert'] is None
+        assert result.json()['detections'] == []
         assert (await client.post(f'/api/device-camera/{run}/stop',headers=headers)).status_code==204
     assert await admin_conn.fetchval('SELECT count(*) FROM cases')==before
 
@@ -88,7 +89,8 @@ async def test_changed_student_or_ended_exam_stops_evidence_capture(client,admin
     assert await admin_conn.fetchval('SELECT count(*) FROM detection_events')==0
 
 
-async def test_checked_objects_enter_existing_case_workflow_with_private_snapshot(client,admin_conn,active_session,device,monkeypatch):
+@pytest.mark.parametrize('socket_available',[True,False])
+async def test_checked_objects_enter_existing_case_workflow_with_private_snapshot(client,admin_conn,active_session,device,monkeypatch,socket_available):
     from app.services import storage
     saved={}
     class PrivateStorage:
@@ -96,6 +98,10 @@ async def test_checked_objects_enter_existing_case_workflow_with_private_snapsho
         async def delete(self,paths):
             for path in paths:saved.pop(path,None)
     monkeypatch.setattr(storage,'get_storage',lambda:PrivateStorage())
+    if not socket_available:
+        from app.routers import internal
+        async def unavailable(*args,**kwargs): raise RuntimeError('Test live transport outage')
+        monkeypatch.setattr(internal,'emit_detection',unavailable)
     headers={**auth(await login(client,TEACHER_EMAIL)),'Content-Type':'image/jpeg'}
     run=(await client.post(f'/api/sessions/{active_session}/device-camera/start',headers=auth(await login(client,TEACHER_EMAIL)),json={'seat_number':14})).json()['run_id']
     last=None
@@ -104,6 +110,11 @@ async def test_checked_objects_enter_existing_case_workflow_with_private_snapsho
         assert last.status_code==200,last.text
         if i<2:await asyncio.sleep(1.6)
     assert last.json()['alert'] is not None,last.text
+    detection=last.json()['detections'][0]
+    assert detection['case_id']==last.json()['alert']['id']
+    assert detection['session_id']==active_session and detection['seat_number']==14
+    assert detection['behaviour_types']==['PHONE_DETECTED']
+    assert 'snapshot_path' not in detection
     row=await admin_conn.fetchrow('SELECT * FROM detection_events WHERE session_id=$1::uuid',active_session)
     assert row['seat_number']==14 and row['snapshot_path'] in saved
     # A browser boolean cannot fabricate a head-pose alert.
@@ -181,13 +192,17 @@ async def test_image_verified_head_alone_creates_private_review_alert(client,adm
     for index in range(8):
         result=await sample(index)
         assert result['alert'] is None
+        assert result['detections']==[]
     assert result['head']['calibrated']
     y,p=math.radians(yaw),math.radians(-pitch)
     source.rotation=np.array([[math.cos(y),0,math.sin(y)],[0,1,0],[-math.sin(y),0,math.cos(y)]]) @ np.array([[1,0,0],[0,math.cos(p),-math.sin(p)],[0,math.sin(p),math.cos(p)]])
     alerts=[]
     for index in range(8,19):
         result=await sample(index)
-        if result['alert']:alerts.append(result['alert'])
+        if result['alert']:
+            alerts.append(result['alert'])
+            assert result['detections'][0]['case_id']==result['alert']['id']
+            assert result['detections'][0]['behaviour_types']==['HEAD_POSE_VIOLATION']
     assert result['head']['sustained'] and len(alerts)==1
     case=alerts[0]
     row=await admin_conn.fetchrow('SELECT * FROM detection_events WHERE session_id=$1::uuid',active_session)
@@ -235,7 +250,15 @@ async def test_phone_alert_delivered_over_hosted_polling_to_authorized_roles(cli
         for email in [ADMIN_EMAIL,CONTROLLER_EMAIL,STUDENT_A_EMAIL]:assert received[email].empty()
     finally:
         for socket in connections:
-            if socket.connected:await socket.disconnect()
+            if socket.connected:
+                # Close both ends so fixture long-poll GETs cannot keep the
+                # test server alive after delivery assertions have completed.
+                tasks=[socket.eio.read_loop_task,socket.eio.write_loop_task]
+                await sockets.sio.eio.disconnect(socket.eio.sid)
+                await socket.eio.disconnect(abort=True)
+                for task in tasks:
+                    if not task.done():task.cancel()
+                await asyncio.gather(*tasks,return_exceptions=True)
 
 
 async def test_unavailable_storage_reports_failure_and_releases_retry_cooldown(client,admin_conn,active_session,device,monkeypatch):

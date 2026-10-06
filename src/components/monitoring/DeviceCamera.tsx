@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { request } from '@/lib/api';
+import { request, publishCommittedDetections, type ApiDetection } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/FormElements';
 import type { HeadState } from '@/lib/vision/head-pose';
@@ -7,7 +7,7 @@ import { ObjectOverlayTracker, type CameraObject } from '@/lib/vision/object-tra
 import { useLiveRevision } from '@/lib/live-context';
 
 type Seat={seat_number:number;student_name:string;registration_no:string};
-type SampleResult={objects:CameraObject[];ai_seconds:number;alert:unknown|null;alert_error:string|null;review_observations:number};
+type SampleResult={objects:CameraObject[];ai_seconds:number;alert:unknown|null;alert_error:string|null;review_observations:number;detections?:ApiDetection[]};
 interface Capture {
   stream:MediaStream;worker:Worker;controller:AbortController;run:string|null;
   head:HeadState|null;ready:boolean;headPending:boolean;stopped:boolean;
@@ -41,7 +41,8 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
   const [headError,setHeadError]=useState(''),[seconds,setSeconds]=useState<number|null>(null),[saved,setSaved]=useState(false);
   const [verification,setVerification]=useState(''),[headVerificationError,setHeadVerificationError]=useState('');
   const [alertCount,setAlertCount]=useState(0);
-  const receiveAlert=(result:{alert:unknown|null;alert_error:string|null})=>{
+  const receiveAlert=(result:{alert:unknown|null;alert_error:string|null;detections?:ApiDetection[]})=>{
+    publishCommittedDetections(result.detections||[]);
     if(result.alert){setSaved(true);setAlertCount(value=>value+1);}
     return result.alert_error;
   };
@@ -149,7 +150,7 @@ export function DeviceCamera({sessionId,active=true}:{sessionId?:string;active?:
         sampleCanvas.width=Math.round(source.videoWidth*scale);sampleCanvas.height=Math.round(source.videoHeight*scale);
         sampleCanvas.getContext('2d')!.drawImage(source,0,0,sampleCanvas.width,sampleCanvas.height);
         try{
-          const result=await request<{head:HeadState;alert:unknown|null;alert_error:string|null;review_enabled:boolean}>('POST',`/api/device-camera/${state.run}/head/frame`,{
+          const result=await request<{head:HeadState;alert:unknown|null;alert_error:string|null;review_enabled:boolean;detections?:ApiDetection[]}>('POST',`/api/device-camera/${state.run}/head/frame`,{
             query:{frame_index:headIndex++},rawBody:await blob(sampleCanvas),signal:AbortSignal.any([state.controller.signal,AbortSignal.timeout(15000)])});
           if(state.stopped)return;
           setHeadVerificationError(receiveAlert(result)||'');

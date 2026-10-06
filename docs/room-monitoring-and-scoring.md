@@ -30,7 +30,14 @@ face detection losing faces in a wide-room image and avoids VIDEO tracking
 carrying one seat's face into another crop. Multiple faces, unclear faces, and
 faces straddling seat regions cannot establish an attributed head warning.
 
-Live Monitor opens the whole-classroom camera by default. Each mapped seat also
+Live Monitor opens the previous **Live camera** by default: one assigned student
+in the full camera view, with device head tracking and the original phone/book
+checker. Select the student seat, start the camera, and set neutral pose. The
+**Classroom mapping** option explicitly switches to the room pipeline; it is not
+required to use the restored live camera. Switching modes releases the previous
+camera and verification run. The CSV seating plan and alert feed remain shared.
+
+In Classroom mapping, each mapped seat also
 has its own browser head-pose tracker and native image crop, using the shared
 MediaPipe IMAGE model. All student cards keep their yaw, pitch, and roll visible;
 highlighting a seat does not restrict tracking or hide another student's pose.
@@ -108,7 +115,7 @@ cooldown. The website's authorized REST reconciliation recovers missed live
 messages. Failed uncommitted uploads release their owned cooldown claims for
 retry and report an error in the camera panel.
 
-Committed room alerts are also returned in the camera HTTP response using the
+Committed live-camera and room alerts are also returned in the camera HTTP response using the
 same authorized detection format as REST and Socket.IO. The active feed inserts
 these immediately, deduplicates them against socket delivery, and keeps its
 socket subscription stable during refreshes. A REST request begun before a new
